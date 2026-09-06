@@ -18776,15 +18776,39 @@ function CustomerPage({branchId,tableId,token}){
   const readOutbox=()=>{try{const r=localStorage.getItem(OUTBOX_KEY);const o=r?JSON.parse(r):null;return (o&&Array.isArray(o.lines)&&o.lines.length)?o:null;}catch{return null;}};
   const writeOutbox=(o)=>{try{o?localStorage.setItem(OUTBOX_KEY,JSON.stringify(o)):localStorage.removeItem(OUTBOX_KEY);}catch{}setOutbox(o);};
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
+  const hadOrderRef=useRef(false);               // เคยเห็นบิลของโต๊ะนี้แล้วหรือยัง
+  const[justPaid,setJustPaid]=useState(false);   // บิลถูกปิดระหว่างที่เปิดหน้าค้างอยู่
   const[myOrder,setMyOrder]=useState(null);
   const[optionLib,setOptionLib]=useState([]);   // branch option-group library (to resolve bound refs)
   const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed" | "net"
   const[gateTry,setGateTry]=useState(0);         // กดลองใหม่ = รันประตูซ้ำ (ใช้เป็น dep ของ effect)
+  const[posCfg,setPosCfg]=useState(null);        // ตั้งค่า POS ของสาขา (VAT/service charge) — ใช้คิดยอดให้ตรงบิล
+  // ยอดที่ต้องจ่ายจริง — สูตรเดียวกับที่แคชเชียร์ใช้ตอนปิดบิล (ดู POSOrderPanel)
+  // บิลปิดแล้วใช้ total ที่บันทึกไว้จริง ไม่คำนวณซ้ำ
+  const custBill=useMemo(()=>{
+    const sub=+(myOrder&&myOrder.subtotal)||0;
+    const disc=+(myOrder&&myOrder.discount)||0;
+    const base=Math.max(0,sub-disc);
+    const scRate=posCfg&&posCfg.service_charge_enabled?(+posCfg.service_charge_rate||0):0;
+    const sc=Math.round(base*scRate)/100;
+    const vatRate=posCfg&&posCfg.vat_enabled?(+posCfg.vat_rate||0):0;
+    const vatIncluded=!posCfg||posCfg.vat_included!==false;
+    const vatBase=base+sc;
+    const vat=vatRate>0?Math.round(vatIncluded?vatBase*vatRate/(100+vatRate)*100:vatBase*vatRate)/100:0;
+    const due=vatIncluded?base+sc:base+sc+vat;
+    return {scRate,sc,vatRate,vat,vatIncluded,
+      due:(myOrder&&myOrder.status==="paid")?(+myOrder.total||0):Math.round(due*100)/100};
+  },[myOrder,posCfg]);
   const[gateLoading,setGateLoading]=useState(true);
-  async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);if(ex&&ex.length>0)setMyOrder(ex[0]);else setMyOrder(null);}catch(e){console.error("loadMyOrder",e);}}
+  async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);
+    if(ex&&ex.length>0){setMyOrder(ex[0]);hadOrderRef.current=true;}
+    // บิลหายจากผลค้นหา = ถูกปิด (ตัวค้นกรอง paid/cancelled ออก) — ถ้าเคยมีบิลอยู่
+    // ต้องบอกว่า "ชำระแล้ว" ไม่ใช่ทำเหมือนไม่เคยสั่งอะไร ลูกค้าเพิ่งจ่ายเงินไป
+    else{if(hadOrderRef.current)setJustPaid(true);setMyOrder(null);}
+    }catch(e){console.error("loadMyOrder",e);}}
   useEffect(()=>{
     setGateLoading(true);
-    let pollId=null;
+    let pollId=null,menuPollId=null,onVis=null;
     (async()=>{
       try{
         const bs=await api.getBranches();
@@ -18799,11 +18823,24 @@ function CustomerPage({branchId,tableId,token}){
         setBranch(b);setTable(t);
         // กรองที่ตอนโหลด ลูกค้าจะได้ไม่เห็นเมนูของสาขาอื่นแม้แต่ในข้อมูลที่ส่งไป
         setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
-        {const s=ps&&ps[0]?ps[0]:null;setOptionLib(Array.isArray(s&&s.option_library)?s.option_library:[]);}
+        {const s=ps&&ps[0]?ps[0]:null;
+          setOptionLib(Array.isArray(s&&s.option_library)?s.option_library:[]);
+          setPosCfg(s||null);}   // เก็บ VAT/service charge ไว้คิดยอดให้ตรงกับบิลจริง
         setGateError(null);
         // Only start polling order state AFTER the gate passes — don't leak existence of orders to bad-token visitors
         loadMyOrder();
         pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},45000);
+        // ดึงเมนูใหม่ระหว่างมื้อ — ของหมด/ราคาเปลี่ยนต้องถึงมือถือลูกค้า
+        // ไม่งั้นลูกค้าสั่งของที่ครัวเพิ่งกด "วันนี้หมด" แล้วครัวได้ใบสั่งที่ทำไม่ได้
+        const refreshMenus=async()=>{
+          try{
+            const fresh=await api.getMenus();
+            setMenus(fresh.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
+          }catch{}   // เน็ตสะดุดชั่วคราว — ใช้ก้อนเดิมไปก่อน ไม่ต้องรบกวนลูกค้า
+        };
+        menuPollId=setInterval(()=>{if(!document.hidden)refreshMenus();},60000);
+        onVis=()=>{if(!document.hidden){refreshMenus();loadMyOrder();}};
+        document.addEventListener("visibilitychange",onVis);
       }catch(e){
         console.error("scan gate",e);
         // แยก "QR ใช้ไม่ได้จริง" ออกจาก "เน็ตสะดุด/เซิร์ฟเวอร์ช้า" — คนละเรื่องกันคนละทางแก้
@@ -18813,7 +18850,11 @@ function CustomerPage({branchId,tableId,token}){
       }
       setGateLoading(false);
     })();
-    return()=>{if(pollId)clearInterval(pollId);};
+    return()=>{
+      if(pollId)clearInterval(pollId);
+      if(menuPollId)clearInterval(menuPollId);
+      if(onVis)document.removeEventListener("visibilitychange",onVis);
+    };
   },[branchId,tableId,token,gateTry]);
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
@@ -19005,10 +19046,16 @@ function CustomerPage({branchId,tableId,token}){
           <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,margin:0}}>📋 สรุปยอดของฉัน</h3>
           <button onClick={loadMyOrder} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600}}>🔄 รีเฟรช</button>
         </div>
-        {!myOrder||(myOrder.items||[]).length===0?<div style={{textAlign:"center",padding:"50px 20px",color:C.ink4}}>
-          <div style={{fontSize:48}}>🍽️</div>
-          <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,marginTop:8}}>ยังไม่มีรายการสั่งครับ</p>
-        </div>:<>
+        {!myOrder||(myOrder.items||[]).length===0?(justPaid
+          ?<div style={{textAlign:"center",padding:"50px 20px"}}>
+            <div style={{fontSize:56}}>🙏</div>
+            <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:800,color:C.green,marginTop:10}}>ชำระเงินเรียบร้อยแล้ว</p>
+            <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13.5,color:C.ink3,marginTop:6,lineHeight:1.7}}>ขอบคุณที่ใช้บริการครับ<br/>ถ้าต้องการสั่งเพิ่ม กรุณาแจ้งพนักงาน</p>
+          </div>
+          :<div style={{textAlign:"center",padding:"50px 20px",color:C.ink4}}>
+            <div style={{fontSize:48}}>🍽️</div>
+            <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,marginTop:8}}>ยังไม่มีรายการสั่งครับ</p>
+          </div>):<>
           <div style={{background:C.white,borderRadius:12,padding:"10px 12px",marginBottom:10,border:`1px solid ${C.line}`,fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
             <div style={{display:"flex",justifyContent:"space-between"}}>
               <span>สถานะ:</span>
@@ -19029,7 +19076,9 @@ function CustomerPage({branchId,tableId,token}){
           <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:12,padding:"14px 16px",marginTop:10,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>ยอดรวม</span><span>฿{(myOrder.subtotal||0).toFixed(0)}</span></div>
             {myOrder.discount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>ส่วนลด</span><span>-฿{(myOrder.discount||0).toFixed(0)}</span></div>}
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:20,fontWeight:900,marginTop:6,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.3)"}}><span>รวมทั้งสิ้น</span><span>฿{(myOrder.total||0).toFixed(0)}</span></div>
+            {custBill.sc>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>Service Charge {custBill.scRate}%</span><span>+฿{custBill.sc.toFixed(0)}</span></div>}
+            {custBill.vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>VAT {custBill.vatRate}%{custBill.vatIncluded?" (รวมในราคาแล้ว)":""}</span><span>{custBill.vatIncluded?"":"+"}฿{custBill.vat.toFixed(0)}</span></div>}
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:20,fontWeight:900,marginTop:6,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.3)"}}><span>รวมทั้งสิ้น</span><span>฿{custBill.due.toFixed(0)}</span></div>
           </div>
         </>}
       </div>
@@ -19046,12 +19095,16 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{flex:1,overflowY:"auto",padding:10}}>
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:10}}>รายการที่สั่ง</h3>
         {cart.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:8}}>
-          <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
+          <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📝 {item.note}</div>}{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <button onClick={()=>chQty(idx,-1)} style={{width:34,height:34,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12}/></button>
             <span style={{fontWeight:900,fontSize:14,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
             <button onClick={()=>chQty(idx,1)} style={{width:34,height:34,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12}/></button>
           </div>
+          <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} title="บอกครัว (เช่น แพ้กุ้ง ไม่เผ็ด)"
+            style={{background:item.note?C.brandLight:C.bg,border:`1px solid ${item.note?C.brand:C.line}`,borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex",alignItems:"center",gap:3}}>
+            <span style={{fontSize:13}}>📝</span>
+          </button>
           <button onClick={()=>rmCart(idx)} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
         </div>)}
         <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:"10px 0 2px"}}>รวม {itemCount} รายการ</div>
