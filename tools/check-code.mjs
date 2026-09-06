@@ -151,6 +151,17 @@ const guards = [
   ["ตัวพิมพ์: พิมพ์ไม่ผ่าน = ไม่มาร์คว่าพิมพ์แล้ว", AGENT.includes("if (ok) state.sig[o.id] = sig;")],
   ["จุดสถานะเครื่องพิมพ์ดูอายุค่า", APP.includes("const fresh=age<3*60*1000;")],
   ["ช่องตัวเลขไม่มี type=number ดิบ (iOS)", (APP.match(/<input[^>]*type="number"/g) || []).length === 0],
+  // หน้าลูกค้าเปิดสาธารณะ (แค่สแกน QR ก็เข้าได้) — สูตรอาหารต้องไม่หลุดไปกับ JSON
+  ["หน้าลูกค้าไม่ส่ง ingredients/sop ออกไป", (() => {
+    const k = APP.indexOf("getMenusPublic:");
+    if (k < 0) return false;
+    const ln = APP.slice(k, k + 400);
+    if (!ln) return false;
+    return !ln.includes("ingredients") && !ln.includes("sop");
+  })()],
+  ["หน้าลูกค้าโหลดครั้งแรกใช้ getMenusPublic", APP.includes("await Promise.all([api.getMenusPublic(),api.getPOSSettings(branchId)])")],
+  ["สถานะของหมดยังเช็คทุก 1 นาที", APP.includes("menuPollId=setInterval(()=>{if(!document.hidden)refreshAvail();},60000)")],
+  ["ตัวจับเวลาเมนูเต็มถูกเคลียร์ตอนออกจากหน้า", APP.includes("if(fullPollId)clearInterval(fullPollId);")],
 ];
 for (const [label, cond] of guards) ok_(label, cond);
 

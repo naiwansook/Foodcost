@@ -343,6 +343,11 @@ const api = {
   updateIng: (id, d) => sb(`ingredients?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteIng: (id) => sb(`ingredients?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getMenus: () => sb(`menus?order=id.asc`),
+  // หน้าลูกค้าเป็นหน้าสาธารณะ — ห้ามส่ง ingredients/sop (สูตรอาหาร) ออกไป
+  // และเอาเฉพาะฟิลด์ที่หน้านั้นใช้จริง: 315 KB -> 78 KB ต่อครั้ง
+  getMenusPublic: () => sb(`menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&price=gt.0&order=id.asc`),
+  // ระหว่างมื้อ สิ่งเดียวที่เปลี่ยนคือ "วันนี้หมด/ซ่อน" — 12 KB พอ
+  getMenuAvail: () => sb(`menus?select=id,availability&price=gt.0`),
   addMenu: (d) => sb("menus", { method: "POST", body: JSON.stringify(d) }),
   updateMenu: (id, d) => sb(`menus?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteMenu: (id) => sb(`menus?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -18848,7 +18853,7 @@ function CustomerPage({branchId,tableId,token}){
     }catch(e){console.error("loadMyOrder",e);}}
   useEffect(()=>{
     setGateLoading(true);
-    let pollId=null,menuPollId=null,onVis=null;
+    let pollId=null,menuPollId=null,fullPollId=null,onVis=null;
     (async()=>{
       try{
         const bs=await api.getBranches();
@@ -18859,7 +18864,7 @@ function CustomerPage({branchId,tableId,token}){
         const matches=await api.scanTable(branchId,tableId,token);
         if(!Array.isArray(matches)||matches.length===0){setGateError("bad_token");setBranch(b);setGateLoading(false);return;}
         const t=matches[0];
-        const[ms,ps]=await Promise.all([api.getMenus(),api.getPOSSettings(branchId)]);
+        const[ms,ps]=await Promise.all([api.getMenusPublic(),api.getPOSSettings(branchId)]);
         setBranch(b);setTable(t);
         // กรองที่ตอนโหลด ลูกค้าจะได้ไม่เห็นเมนูของสาขาอื่นแม้แต่ในข้อมูลที่ส่งไป
         setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
@@ -18874,11 +18879,25 @@ function CustomerPage({branchId,tableId,token}){
         // ไม่งั้นลูกค้าสั่งของที่ครัวเพิ่งกด "วันนี้หมด" แล้วครัวได้ใบสั่งที่ทำไม่ได้
         const refreshMenus=async()=>{
           try{
-            const fresh=await api.getMenus();
+            const fresh=await api.getMenusPublic();
             setMenus(fresh.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
           }catch{}   // เน็ตสะดุดชั่วคราว — ใช้ก้อนเดิมไปก่อน ไม่ต้องรบกวนลูกค้า
         };
-        menuPollId=setInterval(()=>{if(!document.hidden)refreshMenus();},60000);
+        // ของหมด/ซ่อน/เมนูถูกลบ = ต้องถึงมือถือลูกค้าเร็ว → เช็คทุกนาทีเหมือนเดิม
+        // แต่ดึงแค่สถานะ (12 KB) ไม่ใช่เมนูทั้งก้อน (78 KB) — คนละเรื่องกันเรื่องปริมาณ
+        // หมายเหตุ: การ "เอากลับมาขาย" (un-hide) จะเห็นในรอบเมนูเต็มถัดไป
+        // ตั้งใจเช่นนี้ — ทิศที่พลาดไม่ได้คือ "หมดแล้วยังสั่งได้" ไม่ใช่ทางกลับกัน
+        const refreshAvail=async()=>{
+          try{
+            const rows=await api.getMenuAvail();
+            const by=new Map((rows||[]).map(r=>[r.id,r.availability||{}]));
+            setMenus(ms=>ms.filter(m=>by.has(m.id)&&by.get(m.id)[branchId]!=="hidden")
+                           .map(m=>({...m,availability:by.get(m.id)})));
+          }catch{}   // เน็ตสะดุด — ใช้สถานะเดิมไปก่อน
+        };
+        menuPollId=setInterval(()=>{if(!document.hidden)refreshAvail();},60000);
+        // เมนูใหม่/ราคาเปลี่ยน ไม่ได้เกิดกลางมื้อ — 10 นาทีครั้งพอ
+        fullPollId=setInterval(()=>{if(!document.hidden)refreshMenus();},600000);
         onVis=()=>{if(!document.hidden){refreshMenus();loadMyOrder();}};
         document.addEventListener("visibilitychange",onVis);
       }catch(e){
@@ -18893,6 +18912,7 @@ function CustomerPage({branchId,tableId,token}){
     return()=>{
       if(pollId)clearInterval(pollId);
       if(menuPollId)clearInterval(menuPollId);
+      if(fullPollId)clearInterval(fullPollId);
       if(onVis)document.removeEventListener("visibilitychange",onVis);
     };
   },[branchId,tableId,token,gateTry]);
@@ -20876,7 +20896,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
-    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation} onTogglePrintStation={(v)=>setPS(v)}/>}
+    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation}/>}
     {showReceipt&&<ReceiptSettingsModal currentBranch={currentBranch} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}
   </div>;
 }
