@@ -181,11 +181,28 @@ if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.gre
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
+// รวมจำนวนตามคีย์ก่อนเทียบเสมอ — ห้ามใช้ new Map(entries) ตรงๆ เพราะคีย์ซ้ำจะ "ทับกัน"
+// ไม่ใช่บวกกัน (posAppendItems ต่อเมนูเดิมเป็นแถวใหม่ ไม่รวมแถว) ถ้าทับกันแล้ว
+// การสั่งเมนูเดิมซ้ำจะไม่มีวันถูกนับเป็นรายการใหม่ → ครัวไม่ได้ใบสั่งเลย
+function sumByKey(rows) {
+  const m = new Map();
+  for (const [k, q] of rows) m.set(k, (m.get(k) || 0) + (+q || 0));
+  return m;
+}
 function newItemsVs(oldSig, items) {
   try {
-    const m = new Map(JSON.parse(oldSig).map(([mid, q, n]) => [`${mid}|${n}`, q]));
-    return items.filter(i => { const k = `${i.menu_id}|${i.note || ""}`; return !m.has(k) || m.get(k) < i.qty; })
-      .map(i => { const k = `${i.menu_id}|${i.note || ""}`; return { ...i, qty: i.qty - (m.get(k) || 0) }; });
+    const key = i => `${i.menu_id}|${i.note || ""}|${optionsText(i.options)}`;
+    const old = sumByKey(JSON.parse(oldSig).map(([mid, q, n, opt]) => [`${mid}|${n}|${opt || ""}`, q]));
+    const cur = sumByKey((items || []).map(i => [key(i), i.qty]));
+    const out = [], seen = new Set();
+    for (const i of items || []) {
+      const k = key(i);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const delta = (cur.get(k) || 0) - (old.get(k) || 0);
+      if (delta > 0) out.push({ ...i, qty: delta });
+    }
+    return out;
   } catch { return items; }
 }
 
@@ -251,13 +268,17 @@ async function printItems(items, tableNum, printers) {
     const parts = idxs.map(i => bufs[i]);
     return { p, buf: Buffer.concat(parts.map(x => x.buf)), mode: bufsMode(parts), n: idxs.length };
   }).filter(Boolean);
+  let anyFail = false;
   await Promise.all(jobs.map(({ p, buf, mode, n }) =>
     sendToPrinter(p.ip, p.port, buf)
       .then(() => console.log(`  ✅ พิมพ์ ${n} รายการ [${mode}] → ${p.name} (${p.ip})`))
-      .catch(e => console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`))
+      .catch(e => { anyFail = true; console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); })
   ));
   const orphan = items.filter(it => !usable.some(p => printerHandles(p, it)));
   if (orphan.length) console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
+  // สำเร็จ = ส่งผ่านทุกเครื่องที่รับ และมีเครื่องรับจริงอย่างน้อยหนึ่งเครื่อง
+  // ถ้าไม่สำเร็จ ผู้เรียกต้องไม่มาร์คว่าพิมพ์แล้ว เพื่อให้รอบถัดไปลองใหม่
+  return !anyFail && jobs.length > 0 && orphan.length === 0;
 }
 
 // ทดสอบพิมพ์ตามคำสั่งจากแอป: แอปเขียน description.tp = เวลาที่กด → agent พิมพ์หน้าทดสอบให้เครื่องนั้นภายใน ~5 วินาที
@@ -363,17 +384,21 @@ async function tick() {
   for (const o of orders) {
     if (!o || !o.items || !o.items.length) continue;
     const sig = sigOf(o), last = state.sig[o.id], first = !state.init[o.id];
+    // มาร์คว่า "จัดการแล้ว" เฉพาะเมื่อพิมพ์ผ่านจริง — ถ้ากระดาษหมด/หลุดแลน
+    // ต้องปล่อยให้ sig เดิมค้างไว้ รอบถัดไป (5 วิ) จะลองพิมพ์ให้ใหม่เอง
+    let ok = true;
     if (first) {
       console.log(`🆕 ออเดอร์ใหม่ โต๊ะ ${o.table_number} (${new Date().toLocaleTimeString("th-TH")})`);
       const items = last ? newItemsVs(last, o.items) : o.items;
-      if (items.length) await printItems(items, o.table_number, printers);
-      state.init[o.id] = 1;
+      if (items.length) ok = await printItems(items, o.table_number, printers);
+      if (ok) state.init[o.id] = 1;
     } else if (last && last !== sig) {
       console.log(`➕ เพิ่มรายการ โต๊ะ ${o.table_number}`);
       const items = newItemsVs(last, o.items);
-      if (items.length) await printItems(items, o.table_number, printers);
+      if (items.length) ok = await printItems(items, o.table_number, printers);
     }
-    state.sig[o.id] = sig;
+    if (ok) state.sig[o.id] = sig;
+    else console.log(`  🔁 จะลองพิมพ์ใหม่รอบหน้า — โต๊ะ ${o.table_number}`);
   }
   // prune state ให้เหลือเฉพาะออเดอร์ที่ยัง active
   const live = new Set(orders.map(o => String(o.id)));
@@ -458,8 +483,17 @@ async function heartbeat() {
     await greetNewPrinters();
   } catch (e) { console.log("⚠️ โหลดเครื่องพิมพ์ไม่ได้:", e.message); }
   console.log("\n⏳ เริ่มเฝ้าออเดอร์... (Ctrl+C เพื่อหยุด)\n");
-  await tick();
-  setInterval(tick, POLL_MS);
+  // กัน tick ซ้อน — ถ้ารอบก่อนยังไม่จบ (พีค: render ใบ 9 วิ + ส่งเครื่อง 8 วิ)
+  // ต้องข้ามรอบนี้ ไม่งั้นรอบใหม่เห็น state.sig เดิมแล้วสั่งพิมพ์ใบเดิมซ้ำ
+  let tickBusy = false;
+  const tickSafe = async () => {
+    if (tickBusy) { console.log("⏭️  ข้ามรอบ — รอบก่อนยังทำงานอยู่ (กันพิมพ์ซ้ำ)"); return; }
+    tickBusy = true;
+    try { await tick(); } catch (e) { console.log("⚠️ tick ผิดพลาด:", e.message); }
+    finally { tickBusy = false; }
+  };
+  await tickSafe();
+  setInterval(tickSafe, POLL_MS);
   // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
   setInterval(greetNewPrinters, 30 * 1000);
   await pingPrinters();                       // เช็คออนไลน์/ออฟไลน์ครั้งแรก

@@ -18296,6 +18296,14 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   }
   async function checkOut(){
     if(savingRef.current)return;   // กดซ้ำ = ตัดเงินสองรอบ
+    // ยังมีรายการที่ไม่เคยส่งครัว — ถ้าปิดบิลตอนนี้ ตัวพิมพ์จะไม่มีวันเห็น
+    // (ดึงเฉพาะบิลที่ยังไม่ paid) ลูกค้าจ่ายค่าอาหารที่ไม่มีใครทำ และย้อนแก้ไม่ได้
+    if(hasNewItems&&!await confirmDlg({
+      title:"ยังไม่ได้ส่งเข้าครัว",
+      message:"มีรายการที่ยังไม่ได้กด \"ส่งรายการ\" — ถ้าปิดบิลตอนนี้ ครัวจะไม่ได้ใบสั่ง\n\nกด \"ส่งรายการ\" ก่อนแล้วค่อยเช็คบิล",
+      confirmLabel:"ปิดบิลเลย (ครัวไม่ได้ใบ)",
+      cancelLabel:"กลับไปส่งรายการ",
+    }))return;
     setSavingGuard(true);
     try{
       const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
@@ -18770,7 +18778,8 @@ function CustomerPage({branchId,tableId,token}){
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   const[myOrder,setMyOrder]=useState(null);
   const[optionLib,setOptionLib]=useState([]);   // branch option-group library (to resolve bound refs)
-  const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed"
+  const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed" | "net"
+  const[gateTry,setGateTry]=useState(0);         // กดลองใหม่ = รันประตูซ้ำ (ใช้เป็น dep ของ effect)
   const[gateLoading,setGateLoading]=useState(true);
   async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);if(ex&&ex.length>0)setMyOrder(ex[0]);else setMyOrder(null);}catch(e){console.error("loadMyOrder",e);}}
   useEffect(()=>{
@@ -18795,11 +18804,17 @@ function CustomerPage({branchId,tableId,token}){
         // Only start polling order state AFTER the gate passes — don't leak existence of orders to bad-token visitors
         loadMyOrder();
         pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},45000);
-      }catch(e){console.error("scan gate",e);setGateError("bad_token");}
+      }catch(e){
+        console.error("scan gate",e);
+        // แยก "QR ใช้ไม่ได้จริง" ออกจาก "เน็ตสะดุด/เซิร์ฟเวอร์ช้า" — คนละเรื่องกันคนละทางแก้
+        const msg=String((e&&e.message)||e||"");
+        const isNet=/Failed to fetch|NetworkError|timeout|aborted|ECONN|Load failed|5\d\d/i.test(msg)||msg==="";
+        setGateError(isNet?"net":"bad_token");
+      }
       setGateLoading(false);
     })();
     return()=>{if(pollId)clearInterval(pollId);};
-  },[branchId,tableId,token]);
+  },[branchId,tableId,token,gateTry]);
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
   const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(menuCatOf).filter(Boolean))],[menus]);
@@ -18826,6 +18841,13 @@ function CustomerPage({branchId,tableId,token}){
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
+    // ตะกร้าว่าง = ไม่มีอะไรจะส่ง ห้ามเดินต่อเด็ดขาด ไม่งั้นจะไปเขียน outbox ทับ
+    // ของที่ยังส่งไม่สำเร็จให้หายถาวร แล้วขึ้นจอ "สำเร็จ" ทั้งที่ครัวไม่ได้อะไรเลย
+    if(!cart.length){
+      const pend=readOutbox();
+      if(pend&&Array.isArray(pend.lines)&&pend.lines.length){flushOutbox();return;}
+      return;
+    }
     setSending(true);
     try{
       // Re-validate the QR token right before submitting (token may have been rotated mid-session)
@@ -18893,12 +18915,16 @@ function CustomerPage({branchId,tableId,token}){
     const messages={
       no_token:{icon:"🚫",title:"QR ไม่ถูกต้อง",msg:"QR Code นี้ไม่มีรหัสยืนยัน — กรุณาขอ QR ใหม่จากพนักงาน"},
       bad_token:{icon:"⏰",title:"QR หมดอายุแล้ว",msg:"QR Code นี้ถูกยกเลิกการใช้งานแล้ว — กรุณาขอ QR ใหม่จากพนักงาน"},
+      net:{icon:"📶",title:"เชื่อมต่อไม่ได้",msg:"สัญญาณอินเทอร์เน็ตขัดข้องชั่วคราว — QR ของคุณยังใช้ได้ปกติ กดลองใหม่ได้เลย"},
       branch_closed:{icon:"🏪",title:`${branch?.name||"สาขานี้"} ปิดอยู่`,msg:"ขออภัย ขณะนี้ร้านปิดให้บริการ — กรุณาลองใหม่ภายหลังครับ"},
     }[gateError]||{icon:"❌",title:"เข้าระบบไม่ได้",msg:"เกิดข้อผิดพลาด — กรุณาขอ QR ใหม่จากพนักงาน"};
     return <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,padding:24,textAlign:"center"}}>
       <div style={{fontSize:80,marginBottom:14}}>{messages.icon}</div>
       <h2 style={{fontSize:22,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>{messages.title}</h2>
       <p style={{fontSize:15,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,maxWidth:340}}>{messages.msg}</p>
+      {gateError==="net"&&<button onClick={()=>{setGateError(null);setGateLoading(true);setGateTry(t=>t+1);}}
+        style={{marginTop:20,padding:"13px 30px",borderRadius:12,border:"none",background:C.brand,color:"#fff",
+        fontSize:16,fontWeight:800,fontFamily:"'Sarabun',sans-serif",cursor:"pointer"}}>🔄 ลองใหม่</button>}
     </div>;
   }
   if(!table||!branch)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลดเมนู...</p></div></div>;
@@ -20627,6 +20653,20 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       orders.forEach(o=>{if(!o||!o.items)return;const sig=JSON.stringify(o.items.map(i=>[i.menu_id,i.qty,i.note||""]));lastSigRef.current.set(o.id,sig);printedRef.current.add(`${o.id}:init`);});
       persistPrinted();stationPrimedRef.current=true;return;
     }
+    // ส่วนต่างที่ต้องพิมพ์ — รวมจำนวนตามคีย์ทั้งสองฝั่งก่อนเทียบ
+    // (คีย์ซ้ำต้องบวกกัน ไม่ใช่ทับกัน ไม่งั้นสั่งเมนูเดิมซ้ำจะไม่ออกใบครัว)
+    const diffNew=(lastSig,items)=>{
+      try{
+        const sum=rows=>{const m=new Map();for(const[k,q]of rows)m.set(k,(m.get(k)||0)+(+q||0));return m;};
+        const kOf=i=>`${i.menu_id}|${i.note||""}`;
+        const old=sum(JSON.parse(lastSig).map(([m,q,n])=>[`${m}|${n}`,q]));
+        const cur=sum((items||[]).map(i=>[kOf(i),i.qty]));
+        const out=[],seen=new Set();
+        for(const i of items||[]){const k=kOf(i);if(seen.has(k))continue;seen.add(k);
+          const d=(cur.get(k)||0)-(old.get(k)||0);if(d>0)out.push({...i,qty:d});}
+        return out;
+      }catch{return items||[];}
+    };
     orders.forEach(o=>{
       if(!o||!o.items||o.items.length===0)return;
       if(o.status==="paid"||o.status==="cancelled")return;
@@ -20634,13 +20674,12 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       const lastSig=lastSigRef.current.get(o.id);
       const isFirst=!printedRef.current.has(`${o.id}:init`);
       if(isFirst){
-        const newItems=lastSig?(()=>{try{const old=JSON.parse(lastSig);const oldMap=new Map(old.map(([m,q,n])=>[`${m}|${n}`,q]));return o.items.filter(i=>{const k=`${i.menu_id}|${i.note||""}`;return!oldMap.has(k)||oldMap.get(k)<i.qty;}).map(i=>{const k=`${i.menu_id}|${i.note||""}`;const oldQ=oldMap.get(k)||0;return{...i,qty:i.qty-oldQ};});}catch{return o.items;}})():o.items;
+        const newItems=lastSig?diffNew(lastSig,o.items):o.items;
         if(newItems.length>0){printKitchen(newItems,o.table_number,printers);}
         printedRef.current.add(`${o.id}:init`);persistPrinted();
       }else if(lastSig&&lastSig!==sig){
         try{
-          const old=JSON.parse(lastSig);const oldMap=new Map(old.map(([m,q,n])=>[`${m}|${n}`,q]));
-          const newItems=o.items.filter(i=>{const k=`${i.menu_id}|${i.note||""}`;return!oldMap.has(k)||oldMap.get(k)<i.qty;}).map(i=>{const k=`${i.menu_id}|${i.note||""}`;const oldQ=oldMap.get(k)||0;return{...i,qty:i.qty-oldQ};});
+          const newItems=diffNew(lastSig,o.items);
           if(newItems.length>0)printKitchen(newItems,o.table_number,printers);
         }catch{}
       }
@@ -20766,7 +20805,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const[rechecking,setRechecking]=useState(false);   // กำลังกด "เช็คสถานะใหม่" (รอ agent เช็คสด)
   const[settingsP,setSettingsP]=useState(null);      // เครื่องที่เปิดป๊อบอัพ "กำหนดการพิมพ์" อยู่ (null=ปิด)
   const[sName,setSName]=useState("");                // ชื่อที่กำลังแก้
-  const[sCats,setSCats]=useState([]);                // หมวดที่เครื่องนี้รับ ([]=ยังไม่กำหนด/ไม่รับ · [ชื่อ]=เฉพาะหมวดนั้น) — ไม่มี catch-all แล้ว
+  const[sCats,setSCats]=useState([]);
+  const[sAllCats,setSAllCats]=useState(false);   // true = categories:null (รับทุกหมวด) — ต้องเก็บแยก ไม่งั้นถูกกลืนเป็น []                // หมวดที่เครื่องนี้รับ ([]=ยังไม่กำหนด/ไม่รับ · [ชื่อ]=เฉพาะหมวดนั้น) — ไม่มี catch-all แล้ว
   const[sOverride,setSOverride]=useState({});        // menu_id → printer_id (ปักหมุดเมนูเฉพาะให้ออกเครื่องนี้)
   const[sOpenCats,setSOpenCats]=useState(()=>new Set());  // หมวดที่กางดูรายเมนู
   const[sSaving,setSSaving]=useState(false);
@@ -20910,7 +20950,10 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const branchCategories=useMemo(()=>{const s=new Set();(menus||[]).forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort();},[menus,currentBranch]);
   const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c);
   function openSettings(p){
-    setSettingsP(p);setSName(p.name||"");setSCats(Array.isArray(p.categories)?[...p.categories]:[]);   // ไม่มี catch-all แล้ว — null/undefined → [] (ต้องเลือกหมวดเอง)
+    setSettingsP(p);setSName(p.name||"");
+    // categories = null/undefined คือ "รับทุกหมวด" — ต้องจำไว้ ไม่ใช่แปลงเป็น [] แล้วเขียนทับ
+    setSAllCats(p.categories==null);
+    setSCats(Array.isArray(p.categories)?[...p.categories]:[]);   // null/undefined → [] (ต้องเลือกหมวดเอง)
     let dd={};try{dd=JSON.parse(p.description||"{}");}catch{}setSRcpt(dd.rcpt===1);
     const ov={};(menus||[]).forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});setSOverride(ov);setSOpenCats(new Set());
   }
@@ -20924,7 +20967,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       let fresh=p;try{const all=await api.getAllPrinters();const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}
       let dd={};try{dd=JSON.parse(fresh.description||"{}");}catch{}
       if(sRcpt)dd.rcpt=1;else delete dd.rcpt;
-      await api.updatePrinter(p.id,{name,categories:sCats,description:JSON.stringify(dd)});
+      // รับทุกหมวด = เก็บ null (ไม่ใช่ [] ซึ่งแปลว่าไม่รับอะไรเลย)
+      await api.updatePrinter(p.id,{name,categories:sAllCats?null:sCats,description:JSON.stringify(dd)});
       const ups=[];(menus||[]).forEach(m=>{const nw=sOverride[m.id]||null;const ol=m.printer_id||null;if(String(nw)!==String(ol))ups.push(api.updateMenu(m.id,{printer_id:nw}));});
       if(ups.length)await Promise.all(ups);
       await load();if(reloadMenus)await reloadMenus();
@@ -20972,6 +21016,20 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
             <button onClick={()=>setSCats([])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
           </div>
         </div>
+        <label style={{display:"flex",alignItems:"center",gap:9,padding:"11px 13px",marginBottom:10,borderRadius:11,cursor:"pointer",
+          background:sAllCats?C.greenLight:C.bg,border:`1.5px solid ${sAllCats?C.green:C.line}`}}>
+          <input type="checkbox" checked={sAllCats} onChange={e=>setSAllCats(e.target.checked)} style={{width:18,height:18,accentColor:C.green}}/>
+          <div>
+            <div style={{fontSize:13.5,fontWeight:800,color:sAllCats?C.green:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🖨️ รับทุกหมวด (พิมพ์ทุกเมนู)</div>
+            <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>
+              เปิดไว้ = เครื่องนี้พิมพ์ทุกอย่างที่สั่ง ไม่ต้องเลือกหมวด · ปิดแล้วค่อยเลือกหมวดด้านล่าง
+            </div>
+          </div>
+        </label>
+        {sAllCats&&<div style={{padding:"9px 12px",marginBottom:10,borderRadius:10,background:C.brandLight,border:`1px solid ${C.brand}44`,
+          fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+          กำลังรับทุกหมวด — การเลือกหมวดด้านล่างจะยังไม่ถูกใช้จนกว่าจะเอาเครื่องหมายถูกด้านบนออก
+        </div>}
         {branchCategories.length===0
             ?<div style={{padding:24,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>ยังไม่มีหมวดหมู่ในสาขานี้ — ไปสร้างหมวดหมู่ที่หน้า "เมนู" ก่อน แล้วค่อยกลับมาเลือก</div>
             :<>
