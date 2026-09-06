@@ -275,7 +275,18 @@ async function printItems(items, tableNum, printers) {
       .catch(e => { anyFail = true; console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); })
   ));
   const orphan = items.filter(it => !usable.some(p => printerHandles(p, it)));
-  if (orphan.length) console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
+  if (orphan.length) {
+    console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
+    // เขียนกลับให้แอปเห็น — ไม่งั้นรู้อยู่คนเดียวบนจอ Termux ครัวไม่ได้ใบแล้วไม่มีใครรู้
+    try {
+      const p0 = usable[0] || (printers || [])[0];
+      if (p0) {
+        let d = {}; try { d = JSON.parse(p0.description || "{}"); } catch {}
+        d.orphan = { at: Date.now(), names: [...new Set(orphan.map(i => i.name))].slice(0, 12), n: orphan.length };
+        await patchPrinter(p0.id, { description: JSON.stringify(d) });
+      }
+    } catch {}
+  }
   // สำเร็จ = ส่งผ่านทุกเครื่องที่รับ และมีเครื่องรับจริงอย่างน้อยหนึ่งเครื่อง
   // ถ้าไม่สำเร็จ ผู้เรียกต้องไม่มาร์คว่าพิมพ์แล้ว เพื่อให้รอบถัดไปลองใหม่
   return !anyFail && jobs.length > 0 && orphan.length === 0;

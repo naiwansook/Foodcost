@@ -494,6 +494,18 @@ const api = {
   updatePOSTable: (id, d) => sb(`tables?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   deletePOSTable: (id) => sb(`tables?id=eq.${id}`, { method:"DELETE", headers:{"Prefer":"return=minimal"} }),
   getPOSOrders: (bid) => sb(`orders?order=created_at.desc&branch_id=eq.${bid}&limit=200`),
+  // บิลทั้งหมดตั้งแต่เวลาที่ระบุ (ใช้ตอนปิดกะ/Z-Report) — แบ่งหน้าจนครบ ไม่ตัดที่ 200
+  // คืนที่ขายดีเกิน 200 ใบต่อกะ ถ้าตัดทิ้งยอดสรุปจะน้อยกว่าจริงโดยไม่มีใครรู้
+  getPOSOrdersSince: async (bid, sinceISO) => {
+    const out = [];
+    for (let off = 0; off < 20000; off += 1000) {
+      const page = await sb(`orders?order=created_at.desc&branch_id=eq.${bid}${sinceISO?`&created_at=gte.${encodeURIComponent(sinceISO)}`:""}&limit=1000&offset=${off}`);
+      if (!Array.isArray(page) || !page.length) break;
+      out.push(...page);
+      if (page.length < 1000) break;
+    }
+    return out;
+  },
   getPOSOrdersByDay: (bid, startISO, endISO) => sb(`orders?branch_id=eq.${bid}&created_at=gte.${encodeURIComponent(startISO)}&created_at=lt.${encodeURIComponent(endISO)}&order=created_at.desc`),
   // Printers
   getPrinters: (bid) => sb(`printers?order=id.asc${bid?`&branch_id=eq.${bid}`:"&branch_id=is.null"}`),
@@ -530,20 +542,25 @@ const api = {
       const seen = new Set((existing||[]).map(i=>i&&i.line_uid).filter(Boolean));
       return (incoming||[]).filter(i=>!(i&&i.line_uid&&seen.has(i.line_uid)));
     };
+    let sawOpenBill=false;   // เคยเห็นบิลเปิดของโต๊ะนี้ในรอบนี้ไหม
     for(let attempt=0; attempt<10; attempt++){
       const ex = await sb(`orders?table_id=eq.${table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`);
       if(Array.isArray(ex)&&ex.length>0){
-        const cur=ex[0];
+        const cur=ex[0];sawOpenBill=true;
         const fresh=dedupe(cur.items,newItems);
         if(fresh.length===0)return cur;                       // already recorded — nothing to do
         const merged=[...(cur.items||[]),...fresh]; const s=sum(merged);
         const guard = cur.updated_at==null ? "is.null" : `eq.${encodeURIComponent(cur.updated_at)}`;
-        const res=await sb(`orders?id=eq.${cur.id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify({items:merged,subtotal:s,total:s,updated_at:new Date().toISOString()}) });
+        // ล็อกสถานะด้วย — ห้ามเขียนทับบิลที่เพิ่งถูกปิดไประหว่างที่เรากำลังคำนวณ
+        const res=await sb(`orders?id=eq.${cur.id}&updated_at=${guard}&status=neq.paid&status=neq.cancelled`, { method:"PATCH", body:JSON.stringify({items:merged,subtotal:s,total:s,updated_at:new Date().toISOString()}) });
         if(Array.isArray(res)&&res.length>0)return res[0];
         // lost the compare-and-set race → back off a random beat so contending diners don't
         // re-collide in lockstep, then re-read fresh and retry
         await new Promise(r=>setTimeout(r,60*(attempt+1)+Math.floor(Math.random()*120)));
       }else{
+        // เคยเห็นบิลเปิดแล้วตอนนี้หายไป = แคชเชียร์เพิ่งปิดบิลระหว่างที่เรากำลังส่ง
+        // ถ้าสร้างบิลใหม่เงียบๆ อาหารจะไปอยู่บิลที่ไม่มีใครรู้ และโต๊ะกลับมาขึ้นว่ามีลูกค้า
+        if(sawOpenBill)throw new Error("บิลของโต๊ะนี้เพิ่งถูกปิด — กรุณาแจ้งพนักงานก่อนสั่งเพิ่ม");
         try{
           const s=sum(newItems);
           const res=await sb("orders", { method:"POST", body:JSON.stringify({branch_id,table_id,table_number,items:newItems,subtotal:s,discount:0,total:s,status:"pending",ordered_by,updated_at:new Date().toISOString()}) });
@@ -18186,6 +18203,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           const row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,{items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
           if(!row){alert("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อดูรายการล่าสุดก่อนยกเลิก");onDone();onClose();return;}
           verRef.current=row.updated_at;
+          // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
+          // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
+          try{
+            printKitchen([{...target,qty:target.qty,name:`❌ ยกเลิก: ${target.name}`,note:`(ยกเลิกโดย ${currentUser?.username||"พนักงาน"})`}],
+              table?.table_number,printers);
+          }catch(err){
+            console.warn("แจ้งครัวเรื่องยกเลิกไม่สำเร็จ",err);
+            posToast("⚠️ ยกเลิกในระบบแล้ว แต่แจ้งครัวไม่สำเร็จ — กรุณาบอกครัวด้วยตัวเอง","warn");
+          }
         }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+friendlyError(e));return;}
       }
     }
@@ -18509,9 +18535,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           <Btn icon={I.print} onClick={()=>{if(splitItems.length===0){alert("กรุณาเลือกรายการ");return;}
             // Compute proportional SC/VAT for the split (relative to original subtotal)
             const ratio=subtotal>0?splitSubtotal/subtotal:0;
-            const splitSC=sc*ratio,splitVAT=vat*ratio;
-            const splitTotal=vatIncluded?splitSubtotal+splitSC:splitSubtotal+splitSC+splitVAT;
-            smartPrintReceipt({items:splitItems,subtotal:splitSubtotal,discount:0,total:splitTotal,payment_method:"split",service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,false);
+            // เฉลี่ยส่วนลดตามสัดส่วนเดียวกับ SC/VAT — เดิมส่ง discount:0 ทำให้บิลแยก
+            // ไม่มีส่วนลดเลย ลูกค้ากลุ่มที่แยกจ่ายรวมกันแล้วจ่ายเกินยอดจริงของบิล
+            const splitDisc=round2(totalDiscount*ratio);
+            const splitBase=Math.max(0,splitSubtotal-splitDisc);
+            const splitSC=round2(sc*ratio),splitVAT=round2(vat*ratio);
+            const splitTotal=round2(vatIncluded?splitBase+splitSC:splitBase+splitSC+splitVAT);
+            smartPrintReceipt({items:splitItems,subtotal:splitSubtotal,discount:splitDisc,total:splitTotal,payment_method:"split",
+              service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded,
+              ...(promoDiscount>0?{promo_amount:round2(promoDiscount*ratio),promo_name:selectedPromo&&selectedPromo.name}:{})},table.table_number,false);
           }} full s={{padding:"9px"}}>พิมพ์บิลแยก (ตัวอย่าง)</Btn>
         </div>
       </div>
@@ -18773,7 +18805,15 @@ function CustomerPage({branchId,tableId,token}){
   const sentUidsRef=useRef(new Set());
   const[outbox,setOutbox]=useState(null);      // null | {lines,at}
   const[outboxBusy,setOutboxBusy]=useState(false);
-  const readOutbox=()=>{try{const r=localStorage.getItem(OUTBOX_KEY);const o=r?JSON.parse(r):null;return (o&&Array.isArray(o.lines)&&o.lines.length)?o:null;}catch{return null;}};
+  // ของค้างเกิน 3 ชม. = คนละมื้อแล้ว ทิ้งไป ไม่ใช่ส่งเข้าบิลใหม่ของลูกค้าคนอื่น
+  // (มื้อหมูกระทะยาวสุดราว 2 ชม. เผื่อไว้อีกชั่วโมง)
+  const OUTBOX_MAX_AGE=3*60*60*1000;
+  const readOutbox=()=>{try{
+    const r=localStorage.getItem(OUTBOX_KEY);const o=r?JSON.parse(r):null;
+    if(!(o&&Array.isArray(o.lines)&&o.lines.length))return null;
+    if(o.at&&Date.now()-o.at>OUTBOX_MAX_AGE){localStorage.removeItem(OUTBOX_KEY);return null;}
+    return o;
+  }catch{return null;}};
   const writeOutbox=(o)=>{try{o?localStorage.setItem(OUTBOX_KEY,JSON.stringify(o)):localStorage.removeItem(OUTBOX_KEY);}catch{}setOutbox(o);};
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   const hadOrderRef=useRef(false);               // เคยเห็นบิลของโต๊ะนี้แล้วหรือยัง
@@ -19490,7 +19530,8 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
   async function load(){
     setLoading(true);
     try{
-      const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrders(currentBranch.id)]);
+      // ดึงบิลตั้งแต่เวลาเปิดกะ ครบทุกใบ (เดิมตัดที่ 200 ใบล่าสุด ทำให้ยอดกะขาด)
+      const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrdersSince(currentBranch.id,shift.opened_at)]);
       setMovements(m);
       const since=new Date(shift.opened_at).getTime();
       // Source of truth: orders linked via cash_movements (sale rows) PLUS any paid orders updated in shift window
@@ -20835,7 +20876,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
-    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} printStation={printStation} onTogglePrintStation={(v)=>setPS(v)}/>}
+    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation} onTogglePrintStation={(v)=>setPS(v)}/>}
     {showReceipt&&<ReceiptSettingsModal currentBranch={currentBranch} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}
   </div>;
 }
@@ -20903,7 +20944,11 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     if(conn.type==="bluetooth"){setStatus(s=>({...s,[p.id]:"bt"}));return;}
     if(isHttps){   // iPad/https เช็คตรงไม่ได้ — อ่านสถานะที่ตัวพิมพ์ (agent) ping แล้วรายงานไว้ใน description.on (อัปเดตทุก 30 วิ)
       let d={};try{d=JSON.parse(p.description||"{}");}catch{}
-      setStatus(s=>({...s,[p.id]:d.on===1?"online":"offline"}));return;
+      // ต้องดูอายุของสถานะด้วย — ตัวพิมพ์เขียน on/onAt ทุกครั้งที่ ping
+      // ถ้าค่าเก่าเกิน 3 นาที แปลว่าตัวพิมพ์ไม่ได้รายงานมาแล้ว = ถือว่าออฟไลน์
+      const age=d.onAt?Date.now()-(+d.onAt||0):Infinity;
+      const fresh=age<3*60*1000;
+      setStatus(s=>({...s,[p.id]:(d.on===1&&fresh)?"online":(d.on===1&&!fresh)?"stale":"offline"}));return;
     }
     setStatus(s=>({...s,[p.id]:"testing"}));
     const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),6000);
@@ -20988,6 +21033,9 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   // จุดสถานะ 2 สีเท่านั้น: เขียว = ออนไลน์ · แดง = ออฟไลน์ (ทุกสถานะที่ไม่ใช่ออนไลน์)
   const stView=(st)=>{
     if(st==="online")return{c:C.green,bg:C.greenLight,t:"🟢 ออนไลน์"};
+    // ตัวพิมพ์เคยรายงานว่าออนไลน์ แต่ค่านั้นเก่าเกิน 3 นาที = ตัวพิมพ์น่าจะหยุดทำงาน
+    // ต้องแยกจาก "ออฟไลน์" ให้ชัด เพราะวิธีแก้คนละอย่าง (เปิดตัวพิมพ์ vs เช็คเครื่องพิมพ์)
+    if(st==="stale")return{c:"#B45309",bg:"#FEF3C7",t:"🟠 ไม่ได้รายงาน (ตัวพิมพ์อาจหยุด)"};
     return{c:C.red,bg:C.redLight,t:"🔴 ออฟไลน์"};
   };
   const activePrinters=printers.filter(p=>p.active!==false);
