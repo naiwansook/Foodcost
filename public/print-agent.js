@@ -16,10 +16,14 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 27;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 28;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
+// ทุกกี่รอบจึงจะดึงบิล "เต็ม" หนึ่งครั้ง (60 รอบ x 5 วิ = 5 นาที)
+// เป็นตาข่ายนิรภัย เผื่อวันหลังมีทางเขียนไหนแก้รายการในบิลโดยไม่ขยับ updated_at
+// ถ้าไม่มีตาข่ายนี้ ใบครัวที่พลาดจะพลาดถาวร — ครัวไม่มีทางรู้เลย
+const FULL_EVERY = 60;
 const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");
 
 if (!BRANCH) { console.error("❌ ต้องใส่ branch id ด้วย เช่น:  node print-agent.js 6"); process.exit(1); }
@@ -44,7 +48,13 @@ async function checkUpdate() {
     if (m && +m[1] > AGENT_VERSION) { console.log(`⬆️  พบเวอร์ชันใหม่ (v${m[1]}) — อัปเดต+รีสตาร์ทอัตโนมัติ...`); process.exit(0); }
   } catch {}
 }
-// ดึงเฉพาะคอลัมน์ที่ agent ใช้จริง (id, เลขโต๊ะ, รายการ) — ประหยัด bandwidth ตอน poll ทุก 5 วิ
+// รอบปกติดึงแค่ "หัวบิล" (id + เวลาแก้ล่าสุด) ~55 ไบต์/บิล
+// เดิมลากรายการในบิลทั้งร้านมาทุก 5 วินาที = หลายสิบ GB ต่อเดือน
+const getActiveOrderHeads = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,updated_at&branch_id=eq.${BRANCH}`);
+// ดึงรายการเฉพาะบิลที่เปลี่ยนจริง — คงตัวกรองสถานะไว้ด้วย เผื่อบิลถูกปิดคั่นระหว่างสองคำขอ
+// (ถ้าถูกปิดไปแล้วจะไม่ถูกส่งกลับมา = ไม่พิมพ์ใบของบิลที่จ่ายเงินไปแล้ว)
+const getOrdersByIds = (ids) => sb(`orders?id=in.(${ids.join(",")})&status=neq.paid&status=neq.cancelled&select=id,table_number,items&branch_id=eq.${BRANCH}`);
+// ดึงเต็ม — ใช้ตอน prime และตอนตาข่ายนิรภัยเท่านั้น
 const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,table_number,items&order=created_at.desc&branch_id=eq.${BRANCH}`);
 // ดึงเฉพาะเครื่องพิมพ์ของสาขานี้ (+ที่ใช้ร่วมทุกสาขา branch_id=null) — ไม่ดึงข้ามสาขา (ทุก caller กรองแบบนี้อยู่แล้ว)
 const getPrinters = () => sb(`printers?or=(branch_id.is.null,branch_id.eq.${BRANCH})&order=id.asc`);
@@ -177,7 +187,7 @@ function sendToPrinter(ip, port, buf) {
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -373,14 +383,31 @@ async function handleScanRequests(printers) {
   }
 }
 
+let fullTick = 0;   // นับรอบไปหาตาข่ายนิรภัย
+let emptyHeads = 0;   // กี่รอบติดกันแล้วที่ "ไม่มีบิลเปิดเลย" (กันคำตอบว่างชั่วคราว)
 async function tick() {
-  let orders, printers;
-  try { [orders, printers] = await Promise.all([getActiveOrders(), getPrinters()]); }
+  let heads, printers;
+  try { [heads, printers] = await Promise.all([getActiveOrderHeads(), getPrinters()]); }
   catch (e) { console.log("⚠️  ดึงข้อมูลไม่ได้ (เช็คเน็ต):", e.message); return; }
   printers = (printers || []).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);
+  heads = heads || [];
+  const uatOf = new Map(heads.map(h => [String(h.id), h.updated_at || null]));
+
+  // บิลที่ต้องเปิดดูรายการ: ยังไม่เคยเห็น / เวลาแก้ขยับ / ไม่มีเวลาแก้ให้เทียบ
+  // (ไม่มี updated_at = เทียบไม่ได้ ต้องถือว่าเปลี่ยน ห้ามเดาว่าเหมือนเดิม)
+  const changed = heads.filter(h => !state.init[h.id] || !h.updated_at || state.uat[h.id] !== h.updated_at);
+  fullTick++;
+  const wantFull = !primed || fullTick >= FULL_EVERY || changed.length > 30;
+  let orders;
+  try {
+    if (wantFull) { orders = await getActiveOrders(); fullTick = 0; }
+    else if (changed.length) orders = await getOrdersByIds(changed.map(h => h.id));
+    else orders = [];
+  } catch (e) { console.log("⚠️  ดึงรายการในบิลไม่ได้ (เช็คเน็ต):", e.message); return; }
+  orders = orders || [];
 
   if (!primed) {
-    for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; }
+    for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; state.uat[o.id] = uatOf.get(String(o.id)) || null; }
     for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; const rp = rpOf(p); if (rp) state.reprinted[p.id] = rp.at; const q = qrOf(p); if (q) state.qrPrinted[p.id] = q.at; const j = pjOf(p); if (j) state.printed[p.id] = j.at; }   // กันพิมพ์ย้อนหลังตอน prime ครั้งแรก
     primed = true; saveState();
     console.log(`🔰 บันทึกออเดอร์ค้าง ${orders.length} รายการ (ไม่พิมพ์ซ้ำ) — พร้อมพิมพ์ออเดอร์ใหม่`);
@@ -408,13 +435,30 @@ async function tick() {
       const items = newItemsVs(last, o.items);
       if (items.length) ok = await printItems(items, o.table_number, printers);
     }
-    if (ok) state.sig[o.id] = sig;
+    // มาร์ค uat พร้อม sig เท่านั้น — ถ้าพิมพ์ไม่ผ่านแล้วเผลอมาร์ค uat ไว้
+    // รอบหน้าจะเห็นว่า "ไม่เปลี่ยน" แล้วไม่เปิดดูรายการอีกเลย = ใบครัวหายถาวร
+    if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; }
     else console.log(`  🔁 จะลองพิมพ์ใหม่รอบหน้า — โต๊ะ ${o.table_number}`);
   }
   // prune state ให้เหลือเฉพาะออเดอร์ที่ยัง active
-  const live = new Set(orders.map(o => String(o.id)));
-  for (const k of Object.keys(state.sig)) if (!live.has(String(k))) delete state.sig[k];
-  for (const k of Object.keys(state.init)) if (!live.has(String(k))) delete state.init[k];
+  // ⚠️ ต้องอิง heads (บิลที่เปิดอยู่ "ทั้งหมด") ไม่ใช่ orders (เฉพาะบิลที่เปลี่ยน)
+  // ถ้าอิง orders รอบที่ไม่มีอะไรเปลี่ยนจะล้างสถานะทิ้งทั้งร้าน แล้วพิมพ์ซ้ำทุกใบ
+  //
+  // ⚠️⚠️ และต้องรวม orders เข้าไปด้วย: heads กับ orders มาจากคนละคำขอ คนละเวลา
+  // บิลที่ลูกค้ากดส่งคั่นระหว่างสองคำขอ จะอยู่ใน orders (พิมพ์ไปแล้ว) แต่ไม่อยู่ใน
+  // heads (ถ่ายภาพไว้ก่อนหน้า) ถ้าไม่รวม จะล้างสถานะของใบที่เพิ่งพิมพ์ทิ้ง
+  // แล้วรอบหน้าพิมพ์ซ้ำทั้งใบ — ครัวทำอาหารสองรอบ
+  const live = new Set(heads.map(h => String(h.id)));
+  for (const o of orders) live.add(String(o.id));
+  // ตอบสนองต่อ "ไม่มีบิลเปิดเลย" แบบช้าหนึ่งจังหวะ — คำขอที่คืน 200 ตัวเปล่า
+  // ชั่วคราวเคยเกิดกับระบบนี้มาแล้ว ถ้าเชื่อทันทีจะล้างสถานะทั้งร้านแล้วพิมพ์ซ้ำหมด
+  // ปล่อยให้สถานะค้างอีกรอบไม่เสียหายอะไร (คีย์ตามเลขบิล เดี๋ยวก็ถูกล้าง)
+  if (live.size === 0) emptyHeads++; else emptyHeads = 0;
+  if (live.size > 0 || emptyHeads >= 2) {
+    for (const k of Object.keys(state.sig)) if (!live.has(String(k))) delete state.sig[k];
+    for (const k of Object.keys(state.init)) if (!live.has(String(k))) delete state.init[k];
+    for (const k of Object.keys(state.uat)) if (!live.has(String(k))) delete state.uat[k];
+  }
   saveState();
 }
 

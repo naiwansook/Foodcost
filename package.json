@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "vite",
-    "build": "node tools/check-undef.mjs && node tools/check-code.mjs && vite build",
+    "build": "node tools/check-undef.mjs && node tools/check-code.mjs && node tools/check-agent-poll.mjs && vite build",
     "preview": "vite preview",
     "lan": "vite build && vite preview",
-    "check": "node tools/check-undef.mjs && node tools/check-code.mjs"
+    "check": "node tools/check-undef.mjs && node tools/check-code.mjs && node tools/check-agent-poll.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.65",
