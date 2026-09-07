@@ -38,13 +38,15 @@ const changedOf = new Function("heads", "state", changedSrc + " return changed;"
 const wantFullOf = new Function("primed", "fullTick", "changed", "FULL_EVERY",
   wantFullSrc.replace("const wantFull =", "return"));
 // รันบล็อก prune ตัวจริง — รวมทั้งการรวม orders และตัวกันคำตอบว่างชั่วคราว
-const pruneWith = new Function("heads", "orders", "state", "ctx",
-  "let emptyHeads = ctx.emptyHeads;\n" + pruneSrc + "\nctx.emptyHeads = emptyHeads; return live;");
+const pruneWith = new Function("heads", "orders", "state", pruneSrc + " return live;");
 
 // ── ตรวจว่านิพจน์อ้างของถูกตัว ────────────────────────────────────────────
 ok_("prune อิง heads (ไม่ใช่ orders อย่างเดียว)", pruneSrc.includes("heads.map"));
 ok_("prune รวม orders เข้าไปด้วย (กันบิลที่เกิดคาบเกี่ยวสองคำขอถูกล้าง)",
   pruneSrc.includes("for (const o of orders) live.add(String(o.id));"));
+ok_("ล้างสถานะเฉพาะรอบที่รู้จริงว่ามีบิลเปิดอยู่ (ไม่เชื่อคำตอบว่าง)",
+  pruneSrc.includes("if (heads.length > 0) {"));
+ok_("ไม่มีตัวนับ emptyHeads ที่ค้างค่าได้แล้ว", !SRC.includes("emptyHeads"));
 ok_("มาร์ค uat พร้อม sig เฉพาะตอนพิมพ์ผ่าน",
   SRC.includes("if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; }"));
 ok_("คำขอรายการคงตัวกรองสถานะไว้ (บิลที่จ่ายแล้วต้องไม่ถูกพิมพ์)",
@@ -59,7 +61,6 @@ function makeWorld() {
     state: { sig: {}, init: {}, uat: {} },
     primed: true,
     fullTick: 0,
-    ctx: { emptyHeads: 0 },
     printed: [],            // ทุกใบที่สั่งพิมพ์ [โต๊ะ, จำนวนรายการ]
     fetchedItemsFor: [],    // บิลที่ต้องเปิดดูรายการในรอบนั้น
   };
@@ -78,6 +79,7 @@ const openOf = db => db.filter(o => o.status !== "paid" && o.status !== "cancell
 // opts.printOk       — จำลองกระดาษหมด/เครื่องหลุด
 // opts.insertBetween — บิลที่ลูกค้ากดส่ง "คั่นกลาง" ระหว่างคำขอหัวบิลกับคำขอรายการ
 // opts.headsEmpty    — จำลองคำขอหัวบิลคืนตัวเปล่าชั่วคราว (แต่บิลยังเปิดอยู่จริง)
+// opts.itemsFail     — จำลองคำขอรายการล้ม (tick ออกก่อนถึงขั้นล้างสถานะ)
 function tick(w, db, opts) {
   const o_ = opts || {};
   const printOk = o_.printOk !== false;
@@ -98,6 +100,8 @@ function tick(w, db, opts) {
   if (wantFull) { orders = openOf(db); w.fullTick = 0; }
   else if (changed.length) orders = openOf(db).filter(o => changed.some(h => h.id === o.id));
   else orders = [];
+  // คำขอรายการล้ม = ของจริง return ออกไปเลย ยังไม่ถึงขั้นล้างสถานะ
+  if (o_.itemsFail) return;
   w.fetchedItemsFor.push(orders.map(o => o.id));
 
   for (const o of orders) {
@@ -115,7 +119,7 @@ function tick(w, db, opts) {
     if (okFlag) { w.state.sig[o.id] = sig; w.state.uat[o.id] = uatOf.get(String(o.id)) || null; }
   }
 
-  pruneWith(heads, orders, w.state, w.ctx);
+  pruneWith(heads, orders, w.state);
 }
 
 const totalQty = w => w.printed.reduce((s, r) => s + r[1], 0);
@@ -176,15 +180,20 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("ถ้ามีทางเขียนไหนลืมขยับ updated_at ตาข่ายนิรภัยยังจับได้ภายใน 5 นาที",
     beforeNet === 1 && w.printed.length === 2);
 }
-{ // 7) บิลถูกปิด — สถานะต้องถูกล้าง และไม่พิมพ์อะไรอีก
+{ // 7) บิลถูกปิดขณะที่โต๊ะอื่นยังเปิดอยู่ — ต้องล้างเฉพาะใบที่ปิด
   const w = makeWorld();
-  const db = [billOf(1, "A1", "T1", [{ menu_id: 10, qty: 2 }])];
+  const db = [
+    billOf(1, "A1", "T1", [{ menu_id: 10, qty: 2 }]),
+    billOf(2, "A2", "T1", [{ menu_id: 11, qty: 1 }]),
+  ];
   tick(w, db);
+  ok_("สองโต๊ะ พิมพ์สองใบ", w.printed.length === 2);
   db[0].status = "paid"; db[0].updated_at = "T2";
   tick(w, db); tick(w, db);
-  ok_("บิลจ่ายแล้ว สถานะถูกล้างหมด",
+  ok_("บิลที่จ่ายแล้วถูกล้างสถานะ",
     w.state.sig[1] === undefined && w.state.uat[1] === undefined && w.state.init[1] === undefined);
-  ok_("บิลจ่ายแล้ว ไม่มีใบเพิ่ม", w.printed.length === 1);
+  ok_("โต๊ะที่ยังเปิดอยู่ สถานะไม่ถูกแตะ", w.state.init[2] === 1 && w.state.uat[2] === "T1");
+  ok_("บิลจ่ายแล้ว ไม่มีใบเพิ่ม", w.printed.length === 2);
 }
 { // 8) โต๊ะเดิมเปิดบิลใหม่หลังปิดบิลเก่า
   const w = makeWorld();
@@ -232,20 +241,43 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("รอบถัดมาต้องไม่พิมพ์ซ้ำ (ครัวไม่ทำอาหารสองรอบ)",
     w.printed.length === before + 1 && w.printed.filter(r => r[0] === "B7").length === 1);
 }
-{ // 13) ⚠️ คำขอหัวบิลคืนตัวเปล่าชั่วคราว ทั้งที่บิลยังเปิดอยู่
+{ // 13) คำขอหัวบิลคืนตัวเปล่าชั่วคราว ทั้งที่บิลยังเปิดอยู่
   const w = makeWorld();
-  const db = Array.from({ length: 6 }, (_, i) => billOf(i + 1, "T" + (i + 1), "T1", [{ menu_id: 10, qty: 2 }]));
+  const db = Array.from({ length: 9 }, (_, i) => billOf(i + 1, "T" + (i + 1), "T1", [{ menu_id: 10, qty: 2 }]));
   tick(w, db);
   const before = w.printed.length;
-  tick(w, db, { headsEmpty: true });                  // สะดุดหนึ่งจังหวะ
-  ok_("คำตอบว่างครั้งเดียว ยังไม่ล้างสถานะ", w.state.init[1] === 1 && w.state.init[6] === 1);
-  tick(w, db);                                        // กลับมาปกติ
-  ok_("พอกลับมาปกติ ไม่พิมพ์ซ้ำ 6 โต๊ะ", w.printed.length === before);
-  // ปิดร้านจริง — บิลหมดจริงต้องถูกล้าง (ช้าหนึ่งจังหวะ ยอมรับได้)
-  for (const b of db) b.status = "paid";
-  tick(w, db); tick(w, db);
-  ok_("ถ้าไม่มีบิลจริงๆ สองรอบติด สถานะถูกล้างตามปกติ", Object.keys(w.state.init).length === 0);
+  ok_("รอบแรกพิมพ์ครบ 9 โต๊ะ", before === 9);
+  for (let i = 0; i < 5; i++) tick(w, db, { headsEmpty: true });   // สะดุดยาว 5 รอบติด
+  ok_("คำตอบว่างติดกัน 5 รอบ ยังไม่ล้างสถานะ", w.state.init[1] === 1 && w.state.init[9] === 1);
+  tick(w, db);
+  ok_("พอกลับมาปกติ ไม่พิมพ์ซ้ำ 9 โต๊ะ", w.printed.length === before);
 }
+{ // 14) ลำดับที่ผู้ตรวจพิสูจน์: ว่าง -> ดึงรายการล้ม (แต่หัวบิลเห็นบิลเต็มมือ) -> ว่าง
+  const w = makeWorld();
+  const db = Array.from({ length: 9 }, (_, i) => billOf(i + 1, "T" + (i + 1), "T1", [{ menu_id: 10, qty: 2 }]));
+  tick(w, db);
+  const before = w.printed.length;
+  tick(w, db, { headsEmpty: true });                 // ว่างครั้งที่ 1
+  tick(w, db, { itemsFail: true });                  // หัวบิลเห็น 9 ใบ แต่ดึงรายการล้ม
+  tick(w, db, { headsEmpty: true });                 // ว่างครั้งที่ 2
+  ok_("รอบที่ดึงข้อมูลล้มคั่นกลาง ต้องไม่ทำให้สถานะถูกล้าง", w.state.init[1] === 1 && w.state.init[9] === 1);
+  tick(w, db);
+  ok_("ไม่พิมพ์ซ้ำทั้งร้านหลังเน็ตสะดุดสลับกับคำตอบว่าง", w.printed.length === before);
+}
+{ // 15) ปิดร้านจริง แล้วเปิดบิลใหม่ — ของเก่าถูกล้างตอนมีบิลจริง
+  const w = makeWorld();
+  const db = [billOf(1, "A1", "T1", [{ menu_id: 10, qty: 2 }])];
+  tick(w, db);
+  db[0].status = "paid";
+  tick(w, db); tick(w, db);
+  ok_("ร้านว่าง สถานะค้างไว้ก่อน (ไม่เสียหาย คีย์เป็นเลขบิล)", w.state.init[1] === 1);
+  db.push(billOf(2, "A2", "T9", [{ menu_id: 11, qty: 1 }]));
+  tick(w, db);
+  ok_("พอมีบิลใหม่จริง ของเก่าถูกล้าง เหลือแต่บิลที่เปิดอยู่",
+    w.state.init[1] === undefined && w.state.init[2] === 1);
+  ok_("บิลใหม่พิมพ์ใบเดียว ไม่ปนกับบิลเก่า", w.printed.length === 2);
+}
+
 
 console.log("\n" + "=".repeat(52));
 console.log(fail === 0 ? "OK ผ่านทั้งหมด " + pass + " ข้อ" : "FAIL ล้มเหลว " + fail + " ข้อ (ผ่าน " + pass + ")");

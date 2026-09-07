@@ -384,7 +384,6 @@ async function handleScanRequests(printers) {
 }
 
 let fullTick = 0;   // นับรอบไปหาตาข่ายนิรภัย
-let emptyHeads = 0;   // กี่รอบติดกันแล้วที่ "ไม่มีบิลเปิดเลย" (กันคำตอบว่างชั่วคราว)
 async function tick() {
   let heads, printers;
   try { [heads, printers] = await Promise.all([getActiveOrderHeads(), getPrinters()]); }
@@ -450,11 +449,20 @@ async function tick() {
   // แล้วรอบหน้าพิมพ์ซ้ำทั้งใบ — ครัวทำอาหารสองรอบ
   const live = new Set(heads.map(h => String(h.id)));
   for (const o of orders) live.add(String(o.id));
-  // ตอบสนองต่อ "ไม่มีบิลเปิดเลย" แบบช้าหนึ่งจังหวะ — คำขอที่คืน 200 ตัวเปล่า
-  // ชั่วคราวเคยเกิดกับระบบนี้มาแล้ว ถ้าเชื่อทันทีจะล้างสถานะทั้งร้านแล้วพิมพ์ซ้ำหมด
-  // ปล่อยให้สถานะค้างอีกรอบไม่เสียหายอะไร (คีย์ตามเลขบิล เดี๋ยวก็ถูกล้าง)
-  if (live.size === 0) emptyHeads++; else emptyHeads = 0;
-  if (live.size > 0 || emptyHeads >= 2) {
+  // ล้างได้ต่อเมื่อ "รู้จริง" ว่าบิลไหนเปิดอยู่บ้างเท่านั้น
+  //
+  // คำขอที่คืน 200 พร้อมตัวเปล่าชั่วคราวเคยเกิดกับระบบนี้มาแล้ว (commit 1b6f529)
+  // และ sb() แปลง body ว่างเป็น [] — แยกจาก "ร้านไม่มีบิลเปิดจริงๆ" ไม่ได้เลย
+  // ถ้าเชื่อแล้วล้างทิ้ง รอบหน้าทุกบิลจะกลายเป็น "บิลใหม่" แล้วพิมพ์ใหม่ทั้งร้าน
+  //
+  // เคยเขียนเป็นตัวนับ "ว่างติดกัน 2 รอบค่อยล้าง" แต่ใช้ไม่ได้จริง เพราะรอบที่
+  // ดึงข้อมูลไม่ผ่านจะ return ออกไปก่อนถึงตัวนับ — จังหวะที่ดึงหัวบิลสำเร็จและ
+  // เห็นบิลเปิดอยู่เต็มมือ แต่ดึงรายการไม่ผ่าน ก็ไม่รีเซ็ต ทั้งที่นั่นคือหลักฐาน
+  // ชัดที่สุดว่าร้านไม่ได้ว่าง
+  //
+  // สถานะที่ค้างอยู่ไม่เสียหายอะไรเลย — คีย์เป็นเลขบิลซึ่งไม่ถูกใช้ซ้ำ
+  // รอบไหนที่มีบิลเปิดจริงก็ล้างของเก่าทิ้งเองอยู่แล้ว
+  if (heads.length > 0) {
     for (const k of Object.keys(state.sig)) if (!live.has(String(k))) delete state.sig[k];
     for (const k of Object.keys(state.init)) if (!live.has(String(k))) delete state.init[k];
     for (const k of Object.keys(state.uat)) if (!live.has(String(k))) delete state.uat[k];
