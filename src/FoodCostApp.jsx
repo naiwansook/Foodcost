@@ -18144,30 +18144,8 @@ function ReceiptSettingsModal({currentBranch,onClose,onSaved}){
       <div style={{background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:12,padding:"11px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.7}}>
         🧾 ใบเสร็จออกแบบตาม <b>ใบกำกับภาษีอย่างย่อ</b> ของไทย — เปิด VAT แล้วระบบจะใส่คำว่า "ใบกำกับภาษีอย่างย่อ" + "ราคารวม VAT แล้ว" + เลขที่ใบเสร็จ ให้อัตโนมัติ · ใส่ <b>ชื่อร้าน/ที่อยู่/เลขผู้เสียภาษี</b> ในหัวกระดาษด้านล่าง
       </div>
-      <div style={{border:`1px solid ${C.line}`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
-        <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-          <input type="checkbox" checked={!!s.vat_enabled} onChange={e=>set('vat_enabled',e.target.checked)} style={{width:18,height:18,accentColor:C.brand}}/>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>📊 จดทะเบียน VAT (ออกใบกำกับภาษีอย่างย่อ)</span>
-        </label>
-        {s.vat_enabled&&<div style={{display:"flex",gap:10,marginTop:10,flexWrap:"wrap",alignItems:"flex-end"}}>
-          <div style={{flex:"0 0 110px"}}><label style={lbl}>อัตรา VAT (%)</label><input value={s.vat_rate??7} onChange={e=>set('vat_rate',e.target.value.replace(/[^\d.]/g,''))} inputMode="decimal" style={iS}/></div>
-          <div style={{flex:"1 1 200px"}}><label style={lbl}>วิธีคิด VAT</label>
-            <div style={{display:"flex",gap:6}}>
-              <button onClick={()=>set('vat_included',true)} style={{flex:1,padding:"9px 8px",borderRadius:9,border:`1.5px solid ${s.vat_included!==false?C.brand:C.line}`,background:s.vat_included!==false?C.brandLight:C.white,color:s.vat_included!==false?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700}}>รวมในราคาแล้ว</button>
-              <button onClick={()=>set('vat_included',false)} style={{flex:1,padding:"9px 8px",borderRadius:9,border:`1.5px solid ${s.vat_included===false?C.brand:C.line}`,background:s.vat_included===false?C.brandLight:C.white,color:s.vat_included===false?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700}}>แยก VAT</button>
-            </div>
-          </div>
-        </div>}
-      </div>
-      <div style={{marginBottom:14}}>
-        <label style={lbl}>ข้อความหัวกระดาษ (ชื่อร้าน · ที่อยู่ · เลขประจำตัวผู้เสียภาษี)</label>
-        <textarea value={s.receipt_header||""} onChange={e=>set('receipt_header',e.target.value)} rows={5} placeholder={TPL} style={{...iS,resize:"vertical",lineHeight:1.6,fontSize:13}}/>
-        <button onClick={()=>set('receipt_header',(s.receipt_header&&s.receipt_header.trim())?s.receipt_header:TPL)} style={{marginTop:6,background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2}}>📋 ใส่แม่แบบใบกำกับภาษีอย่างย่อ</button>
-      </div>
-      <div style={{marginBottom:8}}>
-        <label style={lbl}>ข้อความท้ายกระดาษ</label>
-        <textarea value={s.receipt_footer||""} onChange={e=>set('receipt_footer',e.target.value)} rows={3} placeholder="เช่น ขอบคุณที่ใช้บริการ · FB/Line: ..." style={{...iS,resize:"vertical",lineHeight:1.6,fontSize:13}}/>
-      </div>
+      {/* ฟอร์มชุดเดียวกับหลังบ้าน — เพิ่มฟิลด์ที่ไหนก็ขึ้นทั้งสองจอพร้อมกัน */}
+      <POSSettingsFields s={s} set={set}/>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end",borderTop:`1px solid ${C.line}`,paddingTop:14}}>
         <Btn v="ghost" onClick={preview} icon={I.bill}>👁 ดูตัวอย่าง</Btn>
         <Btn v="success" onClick={save} loading={saving} icon={I.save}>บันทึก</Btn>
@@ -19889,30 +19867,14 @@ function genPromptPayPayload(id,amount){
   for(let i=0;i<p.length;i++){crc^=p.charCodeAt(i)<<8;for(let j=0;j<8;j++)crc=(crc&0x8000)?((crc<<1)^0x1021)&0xFFFF:(crc<<1)&0xFFFF;}
   return p+crc.toString(16).toUpperCase().padStart(4,'0');
 }
-function POSSettingsPanel({currentBranch}){
-  const[settings,setSettings]=useState(null);const[loading,setLoading]=useState(true);const[saving,setSaving]=useState(false);
-  async function load(){setLoading(true);try{const s=await api.getPOSSettings(currentBranch.id);setSettings((s&&s[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10,promptpay_id:"",promptpay_name:"",show_qr_promptpay:false,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}setLoading(false);}
-  useEffect(()=>{load();},[currentBranch.id]);
-  async function save(){
-    setSaving(true);
-    try{
-      const d={...settings,branch_id:currentBranch.id,updated_at:new Date().toISOString()};
-      delete d.id;
-      const res=await api.upsertPOSSettings(d);
-      if(Array.isArray(res)&&res[0])setSettings(res[0]);
-      alert("บันทึกการตั้งค่าเรียบร้อย");
-    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
-    setSaving(false);
-  }
-  if(loading||!settings)return <Loading text="โหลดการตั้งค่า..."/>;
-  function set(k,v){setSettings(s=>({...s,[k]:v}));}
+// ── ฟอร์มตั้งค่า POS ชุดเดียว ใช้ร่วมกันทั้งหลังบ้านและหน้าร้าน ──────────
+// เจ้าของสั่งไว้ว่า "ทุกอย่างต้องเหมือนกันทั้งสองฝั่ง" — เดิมเป็นฟอร์มคนละชุด
+// หลังบ้านมี 11 ฟิลด์ หน้าร้านมีแค่ 5 (ขาดค่าบริการกับ PromptPay ทั้งชุด)
+// ทำเป็นสองชุดแล้วแก้คู่กันไม่มีทางรอด เดี๋ยวก็เหลื่อมกันอีก — ให้มีที่เดียว
+// s = ค่าปัจจุบัน · set(key,value) = ตัวแก้ค่า · ทั้งสองจอมีปุ่มบันทึกของตัวเอง
+function POSSettingsFields({s:settings,set}){
+  // ตัวอย่าง QR ที่สร้างจากเบอร์ — โชว์เฉพาะตอนไม่ได้แนบรูปเอง
   const qrPreview=settings.show_qr_promptpay&&settings.promptpay_id?genPromptPayPayload(settings.promptpay_id,100):"";
-  return <div style={{maxWidth:780}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0}}>⚙️ ตั้งค่า POS — {currentBranch.name}</h3>
-      <Btn onClick={save} icon={I.save} loading={saving} s={{padding:"9px 18px"}}>บันทึก</Btn>
-    </div>
-
     {/* VAT */}
     <Card style={{padding:18,marginBottom:14}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
@@ -20017,6 +19979,34 @@ function POSSettingsPanel({currentBranch}){
         </div>
       </div>
     </Card>
+
+}
+
+function POSSettingsPanel({currentBranch}){
+  const[settings,setSettings]=useState(null);const[loading,setLoading]=useState(true);const[saving,setSaving]=useState(false);
+  async function load(){setLoading(true);try{const s=await api.getPOSSettings(currentBranch.id);setSettings((s&&s[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10,promptpay_id:"",promptpay_name:"",show_qr_promptpay:false,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}setLoading(false);}
+  useEffect(()=>{load();},[currentBranch.id]);
+  async function save(){
+    setSaving(true);
+    try{
+      const d={...settings,branch_id:currentBranch.id,updated_at:new Date().toISOString()};
+      delete d.id;
+      const res=await api.upsertPOSSettings(d);
+      if(Array.isArray(res)&&res[0])setSettings(res[0]);
+      alert("บันทึกการตั้งค่าเรียบร้อย");
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  if(loading||!settings)return <Loading text="โหลดการตั้งค่า..."/>;
+  function set(k,v){setSettings(s=>({...s,[k]:v}));}
+  const qrPreview=settings.show_qr_promptpay&&settings.promptpay_id?genPromptPayPayload(settings.promptpay_id,100):"";
+  return <div style={{maxWidth:780}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0}}>⚙️ ตั้งค่า POS — {currentBranch.name}</h3>
+      <Btn onClick={save} icon={I.save} loading={saving} s={{padding:"9px 18px"}}>บันทึก</Btn>
+    </div>
+
+    <POSSettingsFields s={settings} set={set}/>
   </div>;
 }
 

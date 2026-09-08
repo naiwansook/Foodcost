@@ -341,6 +341,13 @@ const guards = [
   ["ปุ่มรีเฟรชดึงตั้งค่า+เมนูด้วย ไม่ใช่แค่ออเดอร์",
     APP.includes("if(refreshTick){loadAll();try{reloadMenus&&reloadMenus();}catch{}try{reloadPosSettings&&reloadPosSettings();}catch{}}")],
   // ── QR จ่ายเงิน ──
+  // ── ตั้งค่า POS ต้องเหมือนกันทั้งหลังบ้านและหน้าร้าน (เจ้าของสั่งไว้) ──
+  // เดิมเป็นฟอร์มคนละชุด หลังบ้าน 11 ฟิลด์ หน้าร้าน 5 — ขาดค่าบริการกับ PromptPay
+  ["ฟอร์มตั้งค่า POS มีชุดเดียว", APP.split("function POSSettingsFields").length - 1 === 1],
+  ["ทั้งสองจอใช้ฟอร์มชุดเดียวกัน", APP.split("<POSSettingsFields ").length - 1 === 2],
+  ["ช่องแนบรูป QR มีนิยามที่เดียว (ไม่ก๊อปสองชุด)", APP.split("promptpay_qr_image',v)").length - 1 === 1],
+  ["ค่าบริการอยู่ในฟอร์มกลาง (หน้าร้านจึงเห็นด้วย)",
+    APP.includes("service_charge_enabled") && APP.includes("service_charge_rate")],
   ["แนบรูป QR เองได้ (เก็บเป็น Drive ref ไม่ใช่ base64)",
     APP.includes("set('promptpay_qr_image',v)") && APP.includes("<ImgUp label=\"\" value={settings.promptpay_qr_image")],
   ["ใบเสร็จใช้รูปที่แนบก่อน ถ้าไม่มีค่อยสร้างจากเบอร์",
