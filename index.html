@@ -49,9 +49,18 @@
         ["gesturestart", "gesturechange", "gestureend"].forEach(function (ev) {
           document.addEventListener(ev, function (e) { e.preventDefault(); }, { passive: false });
         });
-        document.addEventListener("touchmove", function (e) {
+        // ผูกตัวบล็อกเฉพาะตอนมีนิ้วที่สองแตะลงมา แล้วถอดออกเมื่อเหลือนิ้วเดียว
+        // นิ้วเดียว (เลื่อนจอ/แตะเมนู = แทบทั้งหมดของการใช้งาน) จึงไม่ต้องผ่าน JS เลย
+        // ถ้าผูกค้างไว้ตลอด ทุกการขยับนิ้วต้องรอ JS ตอบก่อนเบราว์เซอร์ถึงจะเลื่อนจอให้
+        var blockPinch = function (e) {
           if (e.touches && e.touches.length > 1) e.preventDefault(); // pinch = 2+ fingers
-        }, { passive: false });
+        };
+        document.addEventListener("touchstart", function (e) {
+          if (e.touches && e.touches.length > 1) document.addEventListener("touchmove", blockPinch, { passive: false });
+        }, { passive: true });
+        document.addEventListener("touchend", function (e) {
+          if (!e.touches || e.touches.length < 2) document.removeEventListener("touchmove", blockPinch);
+        }, { passive: true });
         window.addEventListener("wheel", function (e) {
           if (e.ctrlKey) e.preventDefault(); // trackpad pinch / ctrl-wheel zoom
         }, { passive: false });

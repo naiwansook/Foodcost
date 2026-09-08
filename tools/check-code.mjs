@@ -150,6 +150,26 @@ const baseListOf = (() => {
   return new Function("filter", "paid", "unpaid", "cancelled", ln.trim() + " return baseList;");
 })();
 
+// ── รันสคริปต์ล็อกซูมของ index.html จริง แล้วนับว่าผูกตัวดักอะไรไว้บ้าง ──
+// ถ้ามี touchmove แบบ passive:false ผูกค้างไว้ที่ document ตั้งแต่โหลดหน้า
+// WebKit ต้องรอ JS ตอบก่อนทุกครั้งที่นิ้วขยับถึงจะยอมเลื่อนจอ = ลากนิ้วแล้วหนืดทั้งแอป
+// ค้นข้อความไม่พอ ต้องรันแล้วดูว่าตอนโหลดหน้าผูกอะไรไว้จริง
+const zoomLock = (() => {
+  const st = HTML.indexOf("// ── Lock zoom");
+  if (st < 0) throw new Error("ไม่เจอสคริปต์ล็อกซูมใน index.html");
+  const b0 = HTML.indexOf("(function () {", st), b1 = HTML.indexOf("})();", b0);
+  if (b0 < 0 || b1 < 0) throw new Error("ตัดสคริปต์ล็อกซูมไม่ได้");
+  const reg = [];
+  const doc = {
+    addEventListener: (t, fn, o) => reg.push({ t, fn, o: o || {}, phase: "boot" }),
+    removeEventListener: (t, fn) => reg.push({ t, fn, removed: true }),
+  };
+  const win = { addEventListener: (t, fn, o) => reg.push({ t, fn, o: o || {}, phase: "boot" }) };
+  new Function("document", "window", HTML.slice(b0, b1 + 5))(doc, win);
+  return { reg, doc };
+})();
+const bootListeners = (t) => zoomLock.reg.filter(r => r.t === t && r.phase === "boot" && !r.removed);
+
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
 const ck = (label, got, want) => {
@@ -355,7 +375,15 @@ const guards = [
     APP.includes("setSCats([...branchCategories])") && APP.includes("setSCats([])") &&
     APP.includes("setCatSel([...allCategories])") && APP.includes("setCatSel([])")],
   // ── ปุ่มส่งรายการต้องอยู่กับที่ ──
-  ["จอสั่งอาหารใช้โมดัลแบบไม่เลื่อนทั้งก้อน", APP.includes("onDone={loadAll}") && APP.includes("loadAll();}} wide noScroll>")],
+  ["จอสั่งอาหารใช้โมดัลแบบไม่เลื่อนทั้งก้อน", APP.includes(" wide noScroll>")],
+  // loadAll เดิมตั้ง setLoading(true) เสมอ → ทั้งหน้ายุบเป็นสปินเนอร์ทุกครั้งที่ปิดโต๊ะ
+  // ป๊อบอัพถูกถอดทิ้งกลางคัน ดูเหมือนเครื่องค้างทั้งที่แค่กำลังโหลดเบื้องหลัง
+  ["ปิดโต๊ะ/บันทึกแล้วโหลดใหม่แบบเงียบ ไม่ล้างจอ",
+    APP.includes("onDone={()=>loadAll({silent:true})}")
+    && APP.includes("loadAll({silent:true});}} wide noScroll>")
+    && !APP.includes("onDone={loadAll}")],
+  ["ปุ่มรีเฟรชที่กดเองยังเห็นสปินเนอร์ตามเดิม",
+    APP.includes("const silent=!!(o&&o.silent===true);") && APP.includes("onClick={loadAll} icon={I.refresh}")],
   ["แผงสั่งอาหารไม่ยืนกรานความสูง 75vh แล้ว", !APP.includes('minHeight:isMobile?"calc(100vh - 60px)":"75vh"')],
   // ── ใบ QR โต๊ะ: ภาษาไทยต้องออกเป็นรูป ไม่ใช่ข้อความ ──
   ["ชิ้นแรกสั่ง init (0x1b,0x40)", escHead({}, 8, 8).slice(0, 2).join(",") === "27,64"],
@@ -584,11 +612,52 @@ const guards = [
   // ลากนิ้วผ่านกริด 169 ใบ = Safari ยิง mouseenter ไล่ทีละใบ แต่ละครั้งเขียน style ตรงๆ
   // บวก transition:"all" ที่สั่งให้เฝ้าทุกคุณสมบัติ = งานวาดจอต่อเนื่องตลอดการลาก
   ["การ์ดเมนูไม่มีตัวจับเมาส์ที่เขียน style ระหว่างลากนิ้ว", (()=>{
-    const i=APP.indexOf("{filtered.map(m=>{const soldOut=");
+    const i=APP.indexOf("const MenuCard=memo(function MenuCard(");
     if(i<0)return false;
-    const card=APP.slice(i,APP.indexOf("</div>;})}",i));
+    const card=APP.slice(i,APP.indexOf("\n});",i));
     return !card.includes("onMouseEnter") && !card.includes("onMouseLeave") && !card.includes('transition:"all');
   })()],
+  // กริด 169 ใบ: เดิมเป็น JSX inline ในลูป กดเพิ่มเมนู 1 ครั้ง = สร้าง element ใหม่ทั้งกริด
+  ["การ์ดเมนูแยกออกมาและ memo ไว้", APP.includes("const MenuCard=memo(function MenuCard(") && APP.includes("<MenuCard key={m.id}")],
+  // memo จะไร้ผลทันทีถ้า prop ที่ส่งเข้าไปเป็นของใหม่ทุกรอบ
+  ["ตัวช่วยที่ส่งให้การ์ดมี identity คงที่",
+    APP.includes("const addItem=useCallback(") && APP.includes("const pickOrAdd=useCallback(") && APP.includes("onPick={pickOrAdd}")],
+  ["ไม่คำนวณ 'เมนูนี้มีตัวเลือกไหม' ใหม่ทุกใบทุกรอบ",
+    APP.includes("const optsSet=useMemo(") && APP.includes("hasOpts={optsSet.has(m.id)}")],
+  ["คลังตัวเลือกไม่สร้างก้อนใหม่ทุกเรนเดอร์",
+    APP.includes("const optionLib=useMemo(()=>posSettings?.option_library||[],[posSettings]);")],
+  // backdrop-filter เต็มจอบังคับ GPU เบลอใหม่เมื่อเลเยอร์ข้างใต้ขยับ — จอสั่งอาหารอยู่ในโมดัลนี้
+  ["ฉากหลังป๊อบอัพเบลอเฉพาะเครื่องที่มีเมาส์",
+    APP.includes('className="mdl-ovl"') && APP.includes("@media(hover:hover){.mdl-ovl{")
+    && !APP.includes('background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob')],
+  // ── ตัวล็อกซูมใน index.html ต้องไม่ขวางการเลื่อนจอ ──
+  ["ตอนโหลดหน้าไม่มี touchmove ผูกค้างไว้เลย", bootListeners("touchmove").length === 0],
+  ["ยังดักนิ้วแตะไว้เพื่อรู้ว่ามีนิ้วที่สอง (แบบ passive)",
+    bootListeners("touchstart").length === 1 && bootListeners("touchstart")[0].o.passive === true],
+  ["สองนิ้วแตะลงมาแล้วค่อยผูกตัวบล็อกซูม (passive:false)", (()=>{
+    const ts=bootListeners("touchstart")[0];
+    if(!ts)return false;
+    const before=zoomLock.reg.length;
+    ts.fn({touches:{length:2}});
+    const added=zoomLock.reg.slice(before).filter(r=>r.t==="touchmove"&&!r.removed);
+    return added.length===1 && added[0].o.passive===false;
+  })()],
+  ["นิ้วเดียวแตะ ต้องไม่ผูกอะไรเพิ่ม", (()=>{
+    const ts=bootListeners("touchstart")[0];
+    if(!ts)return false;
+    const before=zoomLock.reg.length;
+    ts.fn({touches:{length:1}});
+    return zoomLock.reg.length===before;
+  })()],
+  ["ยกนิ้วแล้วถอดตัวบล็อกออก", (()=>{
+    const te=bootListeners("touchend")[0];
+    if(!te)return false;
+    const before=zoomLock.reg.length;
+    te.fn({touches:{length:0}});
+    const removed=zoomLock.reg.slice(before).filter(r=>r.t==="touchmove"&&r.removed);
+    return removed.length===1;
+  })()],
+  ["ยังบล็อกท่าซูมสองนิ้วของ iOS ไว้ครบ", ["gesturestart","gesturechange","gestureend"].every(g=>bootListeners(g).length===1)],
   ["การ์ดเมนูใช้คลาส mcard (ยกเว้นเมนูที่วันนี้หมด)",
     APP.includes('className={soldOut?undefined:"mcard"}')],
   // hover บนจอสัมผัสไม่มีความหมาย และทำให้การ์ดค้างไฮไลต์หลังแตะ — ต้องกันไว้ที่ CSS

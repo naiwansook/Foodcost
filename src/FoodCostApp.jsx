@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, createContext, useContext } from "react";
 import ErrorBoundary from "./ErrorBoundary.jsx";
 // xlsx is ~130KB gzip and only used in import/export handlers — never on first
 // paint. Load it on demand (one cached dynamic import) so it stays OUT of the
@@ -2037,7 +2037,7 @@ function Modal({title,onClose,children,wide,extraWide,noScroll,disableEsc}){
   const bodyStyle=noScroll
     ?{padding:mob?"14px 16px 18px":"20px 24px 24px",overflow:"hidden",flex:1,minHeight:0,display:"flex",flexDirection:"column"}
     :{padding:mob?"14px 16px 18px":"20px 24px 24px",overflowY:"auto",flex:1,WebkitOverflowScrolling:"touch"};
-  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
+  return <div className="mdl-ovl" onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,height:noScroll?(mob?"96vh":"94vh"):undefined,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:mob?"14px 16px 12px":"18px 24px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:C.bg,gap:10}}>
         <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:mob?16:18,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
@@ -18249,6 +18249,28 @@ function SwipeRow({children,actions,actionWidth=86,bg}){
     <div ref={fg} onClickCapture={e=>{if(dragged.current){e.stopPropagation();e.preventDefault();dragged.current=false;}}} onTouchStart={down} onTouchMove={move} onTouchEnd={end} onTouchCancel={end} onMouseDown={down} onMouseMove={e=>{if(st.current)move(e);}} onMouseUp={end} onMouseLeave={()=>{if(st.current&&st.current.drag===true)end();else st.current=null;}} style={{position:"relative",background:bg||C.white,touchAction:"pan-y",willChange:"transform"}}>{children}</div>
   </div>;
 }
+// ── การ์ดเมนูในกริดจอสั่งอาหาร ───────────────────────────────────────────
+// กริดนี้มี ~169 ใบ และเดิมเป็น JSX inline ในลูป .map() แปลว่าทุกครั้งที่แตะเพิ่มเมนู
+// (setItems) React ต้องสร้าง element ใหม่ทั้งกริดแล้วไล่เทียบทีละใบ ~1,000 โหนด
+// ต่อการแตะหนึ่งครั้ง — แตะรัวๆ บน iPad จึงตามไม่ทัน
+// แยกออกมา + memo และส่ง props เป็นค่าพื้นฐานล้วน (soldOut/hasOpts เป็น boolean)
+// กับ onPick ที่ identity คงที่ → ใบที่ไม่มีอะไรเปลี่ยนจะข้ามการเรนเดอร์ไปเลย
+// สไตล์ที่ไม่ผูกกับสถานะยกขึ้นมาเป็นค่าคงที่ระดับโมดูล ไม่ต้องสร้างใหม่ทุกใบทุกรอบ
+const MC_BADGE={position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"};
+const MC_OUT={...MC_BADGE,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B"};
+const MC_OPT={...MC_BADGE,color:C.teal,background:C.tealLight};
+const MC_ICON={height:40,display:"flex",alignItems:"center",justifyContent:"center"};
+const MC_NAME={fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3};
+const MenuCard=memo(function MenuCard({m,soldOut,hasOpts,onPick}){
+  return <div className={soldOut?undefined:"mcard"} onClick={()=>{if(!soldOut)onPick(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",position:"relative",opacity:soldOut?.55:1}}>
+    {soldOut?<span style={MC_OUT}>วันนี้หมด</span>:hasOpts&&<span style={MC_OPT}>+ ตัวเลือก</span>}
+    {m.image
+      ?<img src={driveImgSrc(m.image,96)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>
+      :<div style={MC_ICON}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
+    <div style={MC_NAME}>{m.name}</div>
+    <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
+  </div>;
+});
 function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[]}){
   const isMobile=useIsMobile();
   const[mobileView,setMobileView]=useState("menu"); // "menu" | "order"
@@ -18340,11 +18362,18 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const total=round2(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat);
   const cashChange=round2(Math.max(0,(+cashRcv||0)-total));
 
-  const optionLib=posSettings?.option_library||[];   // resolve referenced option groups
-  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m)}];});}
+  // เดิมเขียนตรงๆ ในตัวคอมโพเนนต์ → ถ้า option_library ว่าง จะได้ [] ก้อนใหม่ทุกเรนเดอร์
+  // ทำลาย identity ทิ้งทุกครั้ง ตัว memo ที่อ้างอิงมันจึงคำนวณใหม่ฟรีๆ ทุกรอบ
+  const optionLib=useMemo(()=>posSettings?.option_library||[],[posSettings]);   // resolve referenced option groups
+  // menuHasOptions() เดิมถูกเรียกทีละใบทุกเรนเดอร์ ข้างในมี .map().filter() + lib.find()
+  // = สแกนคลังตัวเลือกทั้งกองต่อเมนูต่อรอบ · คำนวณครั้งเดียวเก็บเป็นชุด id แล้วถามทีละใบเอา
+  const optsSet=useMemo(()=>new Set(menus.filter(m=>menuHasOptions(m,bidSale,optionLib)).map(m=>m.id)),[menus,bidSale,optionLib]);
+  // ต้อง identity คงที่ ไม่งั้นการ์ดที่ memo ไว้จะเห็น onPick เปลี่ยนทุกรอบแล้วเรนเดอร์ใหม่หมด
+  // ข้างในใช้ setItems แบบรับค่าเดิมมาคำนวณ จึงไม่ต้องพึ่งอะไรจากรอบเรนเดอร์เลย deps ว่างได้
+  const addItem=useCallback(function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m)}];});},[]);
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
-  function pickOrAdd(m){if(menuHasOptions(m,branch?.id,optionLib))setOptPick(m);else addItem(m);}
+  const pickOrAdd=useCallback((m)=>{if(optsSet.has(m.id))setOptPick(m);else addItem(m);},[optsSet,addItem]);
   function addItemWithOptions(m,chosen,qty){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
     setItems(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m)}]);
@@ -18620,12 +18649,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
       </div>
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
-        {filtered.map(m=>{const soldOut=(m.availability||{})[branch?.id]==="sold_out";return <div key={m.id} className={soldOut?undefined:"mcard"} onClick={()=>{if(soldOut)return;pickOrAdd(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",position:"relative",opacity:soldOut?.55:1}}>
-          {soldOut?<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:"#92400E",background:"#FEF3C7",borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif",border:"1px solid #F59E0B"}}>วันนี้หมด</span>:menuHasOptions(m,branch?.id,optionLib)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
-          {m.image?<img src={driveImgSrc(m.image,96)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
-          <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
-          <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
-        </div>;})}
+        {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={(m.availability||{})[bidSale]==="sold_out"} hasOpts={optsSet.has(m.id)} onPick={pickOrAdd}/>)}
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
@@ -21159,7 +21183,12 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     if(reloadZones)await reloadZones();
   }
   async function loadOrders(){const o=await api.getActiveOrders(currentBranch.id);setActiveOrders(o);autoPrintNew(o);}
-  async function loadAll(){setLoading(true);try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}setLoading(false);}
+  async function loadAll(o){
+    const silent=!!(o&&o.silent===true);   // ปุ่ม "รีเฟรช" ส่ง event มา → ไม่ silent → เห็นสปินเนอร์ตามเดิม
+    if(!silent)setLoading(true);
+    try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}
+    if(!silent)setLoading(false);
+  }
 
   useEffect(()=>{
     stationPrimedRef.current=false;   // re-prime on mount and whenever station mode flips
@@ -21228,11 +21257,11 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
       {showOrders&&<SalesReportModal currentBranch={currentBranch} onClose={()=>setShowOrders(false)}/>}
     </div>
-    {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide noScroll>
+    {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll({silent:true});}} wide noScroll>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10,flexShrink:0}}>
         <button onClick={()=>printTableQR(selTable,currentBranch,printers)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
-      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
+      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})} printers={printers}/>
     </Modal>}
     {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation}/>}
     {showReceipt&&<ReceiptSettingsModal currentBranch={currentBranch} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}
@@ -21897,4 +21926,4 @@ function BranchSelectorWithLoad({user,onSelect,onLogout}){
   return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
-const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html{max-width:100vw;overflow-x:hidden}body{max-width:100vw}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;touch-action:manipulation}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes shakeX{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-9px)}40%,80%{transform:translateX(9px)}}@keyframes navSheen{0%{transform:translateX(-140%)}100%{transform:translateX(140%)}}.navitem{position:relative;overflow:hidden;transition:transform .16s cubic-bezier(.2,.7,.3,1),box-shadow .16s ease,background .14s ease}.navitem::after{content:"";position:absolute;top:0;bottom:0;left:0;width:55%;pointer-events:none;opacity:0;z-index:0;background:linear-gradient(100deg,transparent 0%,rgba(255,168,110,.55) 45%,rgba(255,214,170,.30) 60%,transparent 100%);transform:translateX(-140%)}.navitem>*{position:relative;z-index:1}.navitem:hover{transform:translateY(-6px) scale(1.035);box-shadow:0 16px 28px rgba(74,59,51,.26),0 6px 10px rgba(74,59,51,.16);z-index:2}.navitem:hover::after{opacity:1;animation:navSheen 1.9s ease-in-out infinite}.navitem:active{transform:translateY(-1px) scale(.99);box-shadow:0 2px 6px rgba(74,59,51,.18)}@media(prefers-reduced-motion:reduce){.navitem:hover{transform:none}.navitem:hover::after{animation:none;opacity:0}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}div{overscroll-behavior:contain}body.modal-open{overflow:hidden}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}.mcard{transition:border-color .15s ease,background .15s ease}@media(hover:hover){.mcard:hover{border-color:${C.brand};background:${C.brandLight}}}.mcard:active{background:${C.brandLight};border-color:${C.brand}}`;
+const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html{max-width:100vw;overflow-x:hidden}body{max-width:100vw}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;touch-action:manipulation}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes shakeX{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-9px)}40%,80%{transform:translateX(9px)}}@keyframes navSheen{0%{transform:translateX(-140%)}100%{transform:translateX(140%)}}.navitem{position:relative;overflow:hidden;transition:transform .16s cubic-bezier(.2,.7,.3,1),box-shadow .16s ease,background .14s ease}.navitem::after{content:"";position:absolute;top:0;bottom:0;left:0;width:55%;pointer-events:none;opacity:0;z-index:0;background:linear-gradient(100deg,transparent 0%,rgba(255,168,110,.55) 45%,rgba(255,214,170,.30) 60%,transparent 100%);transform:translateX(-140%)}.navitem>*{position:relative;z-index:1}.navitem:hover{transform:translateY(-6px) scale(1.035);box-shadow:0 16px 28px rgba(74,59,51,.26),0 6px 10px rgba(74,59,51,.16);z-index:2}.navitem:hover::after{opacity:1;animation:navSheen 1.9s ease-in-out infinite}.navitem:active{transform:translateY(-1px) scale(.99);box-shadow:0 2px 6px rgba(74,59,51,.18)}@media(prefers-reduced-motion:reduce){.navitem:hover{transform:none}.navitem:hover::after{animation:none;opacity:0}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}div{overscroll-behavior:contain}body.modal-open{overflow:hidden}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}.mdl-ovl{background:rgba(15,23,42,.72)}@media(hover:hover){.mdl-ovl{background:rgba(15,23,42,.65);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}}.mcard{transition:border-color .15s ease,background .15s ease}@media(hover:hover){.mcard:hover{border-color:${C.brand};background:${C.brandLight}}}.mcard:active{background:${C.brandLight};border-color:${C.brand}}`;
