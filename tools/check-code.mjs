@@ -348,6 +348,10 @@ const guards = [
   ["QR แบบรูปต้องพิมพ์ยอดกำกับ (รูปไม่มียอดฝัง)",
     APP.includes('lines.push({t:"ยอดที่ต้องชำระ ฿"+(+order.total||0).toFixed(2)')],
   ["ปุ่มในป็อปอัพชำระเงินเป็นพิมพ์ QR จ่ายเงิน", APP.includes("onClick={onPrintQR}") && APP.includes("พิมพ์ QR จ่ายเงิน")],
+  // ปุ่มนี้ถูกกดทุกบิล (ลูกค้าตรวจยอดก่อนยืนยัน) — ต้องเด่น ไม่ใช่ปุ่มโปร่งตัวเล็ก
+  ["ปุ่มพิมพ์ QR เป็นสีส้มเด่น ไม่ใช่ปุ่มโปร่ง",
+    APP.includes('<Btn v="primary" onClick={onPrintQR}') && !APP.includes('<Btn v="ghost" onClick={onPrintQR}')],
+  ["ปุ่มพิมพ์ QR ใหญ่พอๆ กับปุ่มยืนยัน", APP.includes('s={{flex:"1 1 44%",padding:"15px 12px",fontSize:15.5')],
   ["ใบ QR จ่ายเงินใช้ยอดสด ไม่ใช่ยอดจากแถวบิลที่ยังไม่ปิด",
     APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(manualDiscount),total,")],
   // ── ป็อปอัพเลื่อนแล้วพื้นหลังต้องอยู่นิ่ง ──

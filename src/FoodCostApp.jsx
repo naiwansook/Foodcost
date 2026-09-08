@@ -18822,9 +18822,11 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:700}}>ยอดสุทธิ</span>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <Btn v="ghost" onClick={onPrintQR} icon={I.print} s={{padding:"10px 14px",fontSize:13}}>พิมพ์ QR จ่ายเงิน</Btn>
-          <Btn v="success" onClick={onPay} loading={saving} full s={{padding:"10px",fontSize:14,fontWeight:800}} icon={I.check}>✅ ยืนยันชำระ & พิมพ์ใบเสร็จ</Btn>
+        <div style={{display:"flex",gap:10,alignItems:"stretch"}}>
+          <Btn v="primary" onClick={onPrintQR} icon={I.print}
+            s={{flex:"1 1 44%",padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>พิมพ์ QR จ่ายเงิน</Btn>
+          <Btn v="success" onClick={onPay} loading={saving} icon={I.check}
+            s={{flex:"1 1 56%",padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>✅ ยืนยันชำระ & พิมพ์ใบเสร็จ</Btn>
         </div>
       </div>
     </div>
