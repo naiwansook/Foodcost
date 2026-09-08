@@ -20362,10 +20362,9 @@ function POSSellerPanel({currentBranch}){
 // (local) category; the price/recipe stays central. (Add-on options = next.)
 function POSMenuTools({currentBranch,variant="dropdown",onChanged}){
   const[open,setOpen]=useState(false);
-  const[active,setActive]=useState(null);  // 'menus' | 'cats' | 'options' | null
+  const[active,setActive]=useState(null);  // 'menus' | 'options' | null
   const items=[
     {id:"menus",l:"เมนูทั้งหมด",icon:"🍔",sub:"สถานะ + จัดหมวด"},
-    {id:"cats",l:"หมวดหมู่",icon:"📂",sub:"เพิ่ม/แก้/ลบหมวด"},
     {id:"options",l:"ตัวเลือกในเมนู",icon:"➕",sub:"add-on รายเมนู"},
   ];
   return <>
@@ -20387,7 +20386,6 @@ function POSMenuTools({currentBranch,variant="dropdown",onChanged}){
         </button>)}
       </div>}
     {active==="menus"&&<POSMenuAvailManager currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
-    {active==="cats"&&<POSLocalCatManager currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
     {active==="options"&&<POSOptionLibrary currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
   </>;
 }
@@ -20399,12 +20397,24 @@ function POSMenuAvailManager({currentBranch,onClose}){
   const isCentral=currentBranch?.type==="central";
   const[menus,setMenus]=useState([]);const[lib,setLib]=useState([]);const[loading,setLoading]=useState(true);
   const[q,setQ]=useState("");const[busyId,setBusyId]=useState(null);
+  const[cat,setCat]=useState("");   // "" = ทุกหมวด · หมวดมาจากครัวกลาง สาขาแก้ไม่ได้
   const[bindMenu,setBindMenu]=useState(null);const[bindSel,setBindSel]=useState({});const[bindBusy,setBindBusy]=useState(false);
   const[bulkOpen,setBulkOpen]=useState(false);const[bulkGroups,setBulkGroups]=useState({});const[bulkMenus,setBulkMenus]=useState({});const[bulkBusy,setBulkBusy]=useState(false);
   async function load(){setLoading(true);try{const[ms,ps]=await Promise.all([api.getMenus(),api.getPOSSettings(currentBranch.id)]);setMenus(ms||[]);const s=ps&&ps[0]?ps[0]:null;setLib(Array.isArray(s&&s.option_library)?s.option_library:[]);}catch(e){console.error("menuMgr",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
-  const visible=menus.filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
+  const visible=menus.filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(cat&&menuCatOf(m)!==cat)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
   async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);}
+  // หมวดที่มีอยู่จริงในเมนูของสาขานี้ — ไม่เอาหมวดของสาขาอื่นมาให้กดแล้วว่างเปล่า
+  // นับจำนวนเมนูต่อหมวดไว้ด้วย จะได้รู้ว่ากดแล้วเจออะไรบ้างโดยไม่ต้องกดลองทีละอัน
+  const catList=(()=>{
+    const m=new Map();
+    for(const x of menus){
+      if(!(isCentral||menuVisibleAt(x,currentBranch.id)))continue;
+      const c=menuCatOf(x);if(!c)continue;
+      m.set(c,(m.get(c)||0)+1);
+    }
+    return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0],"th"));
+  })();
   const AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
   function openBind(m){const sel={};const raw=((m.options_by_branch||{})[String(currentBranch.id)])||[];raw.forEach(b=>{const id=(typeof b==="string"||typeof b==="number")?b:(b&&b.id);if(id)sel[id]=true;});setBindSel(sel);setBindMenu(m);}
   async function saveBind(){
@@ -20435,6 +20445,16 @@ function POSMenuAvailManager({currentBranch,onClose}){
         <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{visible.length} เมนู</span>
         <Btn v="teal" onClick={()=>{setBulkGroups({});setBulkMenus({});setBulkOpen(true);}} icon={I.plus} s={{padding:"7px 13px",fontSize:12}}>🔗 ผูกหลายเมนูพร้อมกัน</Btn>
       </div>
+      {catList.length>0&&<div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:10,borderBottom:`1px solid ${C.line}`}}>
+        {[["","ทั้งหมด",menus.filter(x=>isCentral||menuVisibleAt(x,currentBranch.id)).length],...catList.map(([c,n])=>[c,c,n])].map(([v,l,n])=>{
+          const on=cat===v;
+          return <button key={v||"__all"} onClick={()=>setCat(v)} style={{flexShrink:0,padding:"5px 13px",borderRadius:16,cursor:"pointer",
+            fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:on?800:600,whiteSpace:"nowrap",
+            border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2}}>
+            {l} <span style={{opacity:.7,fontSize:11}}>{n}</span>
+          </button>;
+        })}
+      </div>}
       {visible.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
       :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto"}}>
         {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>
@@ -21421,7 +21441,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
                       ?<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:8}}>ไม่มีเมนูในหมวดนี้</div>
                       :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(220px,100%),1fr))",gap:6}}>
                         {catMenus.map(m=>{const cur=sOverride[m.id];const here=cur!=null&&+cur===+settingsP.id;const other=cur!=null&&+cur!==+settingsP.id;const otherName=other?(printers.find(pr=>+pr.id===+cur)?.name||"เครื่องอื่น"):"";return <label key={m.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:8,cursor:"pointer",background:here?C.blueLight:C.bg,border:`1px solid ${here?C.blue:C.line}`}}>
-                          <input type="checkbox" checked={here} onChange={()=>setSOverride(prev=>({...prev,[m.id]:here?null:settingsP.id}))} style={{accentColor:C.blue,width:15,height:15,cursor:"pointer",flexShrink:0}}/>
+                          <input type="checkbox" checked={has||here} disabled={has} title={has?"หมวดนี้ถูกเลือกทั้งหมวดแล้ว — เอาติ๊กหน้าหมวดออกก่อนถ้าต้องการเลือกทีละเมนู":""} onChange={()=>{if(has)return;setSOverride(prev=>({...prev,[m.id]:here?null:settingsP.id}));}} style={{accentColor:C.blue,width:15,height:15,cursor:has?"not-allowed":"pointer",flexShrink:0,opacity:has?.75:1}}/>
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:12.5,fontFamily:"'Sarabun',sans-serif",fontWeight:here?800:600,color:here?C.blue:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.name}</div>
                             {other&&<div style={{fontSize:9.5,color:"#B45309",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>📌 เลือกไว้ที่ {otherName}</div>}

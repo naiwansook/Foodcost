@@ -387,6 +387,13 @@ const guards = [
   ["ผังโต๊ะได้รับข้อมูลเครื่องพิมพ์", APP.includes("<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers}")],
   ["จอสั่งอาหารมีปุ่มให้พนักงานกดพิมพ์เอง", APP.includes("พิมพ์ใบครัวรายการนี้อีกครั้ง")],
   ["กดพิมพ์แล้วล้างรายการเตือนออก", APP.includes("async function clearPrintFail()") && APP.includes("await clearPrintFail();")],
+  // ── หมวดคุมจากครัวกลางที่เดียว สาขาแก้เองไม่ได้ ──
+  ["จอขายไม่มีเมนูจัดการหมวดแล้ว", !APP.includes("เพิ่ม/แก้/ลบหมวด")],
+  ["ไม่เหลือโค้ดเปิดจอจัดการหมวดที่ตายแล้ว", !APP.includes("active===\"cats\"")],
+  // ── จอเมนูทั้งหมด: กดแยกดูตามหมวดได้ ──
+  ["จอเมนูทั้งหมดมีแถบหมวด", APP.includes("const catList=(()=>{") && APP.includes("if(cat&&menuCatOf(m)!==cat)return false;")],
+  // ── ติ๊กหมวดแล้วเมนูข้างในต้องขึ้นติ๊กตาม ไม่ให้สับสน ──
+  ["ติ๊กหมวด = เมนูในหมวดขึ้นติ๊กตาม", APP.includes("checked={has||here} disabled={has}")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
