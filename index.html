@@ -28,7 +28,7 @@
         try {
           var p = new URLSearchParams(location.search);
           var b = p.get("branch");
-          if (p.get("pos") === "1" && b && /^d+$/.test(b)) {
+          if (p.get("pos") === "1" && b && /^[0-9]+$/.test(b)) {
             href = "/pos-" + b + ".webmanifest";
             var m = document.querySelector('meta[name="apple-mobile-web-app-title"]');
             if (m) m.setAttribute("content", "ขายหน้าร้าน");

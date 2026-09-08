@@ -13,7 +13,26 @@ import fs from "node:fs";
 
 const APP = fs.readFileSync("src/FoodCostApp.jsx", "utf8");
 const AGENT = fs.readFileSync("public/print-agent.js", "utf8");
-const HTML = fs.readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", import.meta.url), "utf8");
+
+// ── ดึงสคริปต์เลือก manifest จาก index.html มา "รันจริง" ──────────────────
+// ไม่ใช่แค่ค้นหาข้อความ — เคยพลาดมาแล้ว: แบ็กสแลชใน regex หายตอนเขียนไฟล์
+// กลายเป็น /^d+$/ ซึ่งไม่แมตช์เลขสาขาเลย ทางลัดจึงยังพาไปหลังบ้านเหมือนเดิม
+// ด่านที่ค้นแค่ข้อความมองไม่เห็นบั๊กแบบนั้น ต้องรันถึงจะจับได้
+function pickManifest(search) {
+  const st = HTML.indexOf("(function () {");
+  const en = HTML.indexOf("})();", st);
+  if (st < 0 || en < 0) throw new Error("หาสคริปต์เลือก manifest ใน index.html ไม่เจอ");
+  const body = HTML.slice(st, en + 5);
+  let href = null, title = null;
+  const doc = {
+    querySelector: () => ({ setAttribute: (_k, v) => { title = v; } }),
+    createElement: () => ({ set href(v) { href = v; }, get href() { return href; } }),
+    head: { appendChild: () => {} },
+  };
+  new Function("location", "document", body)({ search }, doc);
+  return { href, title };
+}
 
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
@@ -174,9 +193,24 @@ const guards = [
   // ทางลัดหน้าจอโฮม: iOS อ่าน start_url จาก manifest ไม่ใช่ URL ที่เปิดอยู่
   // Safari อ่าน manifest ครั้งเดียวตอนโหลดหน้า — ต้องตัดสินใน index.html
   // ไม่ใช่สลับทีหลังด้วย React (เคยทำแล้วไม่ทัน ทางลัดยังพาไปหลังบ้าน)
-  ["index.html เลือก manifest ตามเส้นทางเอง", HTML.includes('href = "/pos-" + b + ".webmanifest";')],
   ["ไม่มีลิงก์ manifest ตายตัวใน HTML แล้ว", !HTML.includes('<link rel="manifest"')],
   ["React ไม่ไปยุ่งกับ manifest อีก", !APP.includes('link[rel="manifest"]')],
+  ["ทางลัดจอขายชี้ไป manifest ของสาขานั้น", pickManifest("?pos=1&branch=8").href === "/pos-8.webmanifest"],
+  ["ชื่อบนหน้าจอโฮมเป็น 'ขายหน้าร้าน'", pickManifest("?pos=1&branch=8").title === "ขายหน้าร้าน"],
+  ["หน้าแรกยังได้ manifest หลัก", pickManifest("").href === "/manifest.webmanifest"],
+  ["pos=1 แต่ไม่มีเลขสาขา = ใช้ตัวหลัก", pickManifest("?pos=1").href === "/manifest.webmanifest"],
+  ["เลขสาขาที่ไม่ใช่ตัวเลข ต้องไม่ถูกเอาไปต่อ path", pickManifest("?pos=1&branch=../evil").href === "/manifest.webmanifest"],
+  ["หน้าลูกค้า (scan) ไม่ใช่ manifest ของจอขาย", pickManifest("?scan=1&branch=8&table=1").href === "/manifest.webmanifest"],
+  ["ไฟล์ manifest ของทุกสาขาที่สร้างไว้ มีอยู่จริง", (() => {
+    const dir = new URL("../public/", import.meta.url);
+    const files = fs.readdirSync(dir).filter(f => /^pos-[0-9]+[.]webmanifest$/.test(f));
+    if (!files.length) return false;
+    return files.every(f => {
+      const j = JSON.parse(fs.readFileSync(new URL(f, dir), "utf8"));
+      const id = f.match(/[0-9]+/)[0];
+      return j.start_url === "/?pos=1&branch=" + id;
+    });
+  })()],
   ["มีสคริปต์สร้าง manifest รายสาขา", fs.existsSync(new URL("./make-pos-manifests.mjs", new URL("../scripts/", import.meta.url)))],
   ["build เรียกสคริปต์สร้าง manifest", JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts.build.includes("make-pos-manifests")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
