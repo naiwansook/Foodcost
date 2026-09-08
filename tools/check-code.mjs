@@ -364,9 +364,8 @@ const guards = [
     APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(manualDiscount),total,")],
   // ── ป็อปอัพเลื่อนแล้วพื้นหลังต้องอยู่นิ่ง ──
   ["กันเลื่อนทะลุไปพื้นหลัง", APP.includes("div{overscroll-behavior:contain}")],
-  ["ล็อกหน้าไม่ให้เลื่อนตอนเปิดป็อปอัพ", APP.includes("body.modal-open{overflow:hidden}") && APP.includes("document.body.classList.add(\"modal-open\")")],
-  ["นับป็อปอัพซ้อน ปลดล็อกเมื่อปิดตัวสุดท้าย",
-    APP.includes("_modalDepth=Math.max(0,_modalDepth-1);") && APP.includes("if(_modalDepth===0)document.body.classList.remove(\"modal-open\")")],
+  ["ล็อกหน้าแบบที่ iOS ยอมรับ (ตรึง body ไม่ใช่ overflow:hidden)", APP.includes('b.position="fixed";b.top=') && APP.includes("window.scrollTo(0,_savedScrollY)")],
+  ["นับป็อปอัพซ้อน ปลดล็อกเมื่อปิดตัวสุดท้าย", APP.includes("_modalDepth=Math.max(0,_modalDepth-1);") && APP.includes("if(_modalDepth===1){") && APP.includes("if(_modalDepth===0){")],
   ["Modal เรียกตัวล็อก", APP.includes("useScrollLock();") && APP.includes("function useScrollLock(){")],
   ["รูปจางยังพิมพ์ติด (ไม่หายเงียบ)", APP.includes("if(a>40&&lum<175)")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",

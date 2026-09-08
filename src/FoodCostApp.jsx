@@ -1977,13 +1977,28 @@ function useIsMobile(breakpoint=768){
 // นับจำนวนป็อปอัพที่เปิดอยู่ — ปลดล็อกเมื่อปิดตัวสุดท้ายเท่านั้น
 // ถ้าไม่นับ ปิดป็อปอัพซ้อนตัวในแล้วหน้าจะเลื่อนได้ทั้งที่ตัวนอกยังเปิดอยู่
 let _modalDepth=0;
+let _savedScrollY=0;
+// ⚠️ iOS Safari "ไม่สน" body{overflow:hidden} เวลาเลื่อนด้วยนิ้ว — ใส่ไปก็เลื่อนได้อยู่ดี
+// (ลองมาแล้วบนไอแพดที่ร้าน พื้นหลังยังขยับตาม) วิธีที่ได้ผลจริงคือตรึง body ไว้กับที่
+// ด้วย position:fixed แล้วเลื่อนขึ้นไปเท่าที่เคยเลื่อนไว้ พอปิดค่อยคืนตำแหน่งเดิม
+// ต้องคืน scrollY ให้ตรง ไม่งั้นปิดป็อปอัพแล้วหน้าเด้งกลับไปบนสุดทุกครั้ง
 function useScrollLock(){
   useEffect(()=>{
     _modalDepth++;
-    document.body.classList.add("modal-open");
+    if(_modalDepth===1){
+      _savedScrollY=window.scrollY||document.documentElement.scrollTop||0;
+      const b=document.body.style;
+      b.position="fixed";b.top=`-${_savedScrollY}px`;b.left="0";b.right="0";b.width="100%";
+      document.body.classList.add("modal-open");
+    }
     return()=>{
       _modalDepth=Math.max(0,_modalDepth-1);
-      if(_modalDepth===0)document.body.classList.remove("modal-open");
+      if(_modalDepth===0){
+        const b=document.body.style;
+        b.position="";b.top="";b.left="";b.right="";b.width="";
+        document.body.classList.remove("modal-open");
+        window.scrollTo(0,_savedScrollY);
+      }
     };
   },[]);
 }
