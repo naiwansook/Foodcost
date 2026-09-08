@@ -16,7 +16,29 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="ในวันสุข" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- ── ลิงก์ manifest ต้องถูกตัวตั้งแต่ตอนแปลง HTML ─────────────────────
+         iOS ตอนกด "เพิ่มไปยังหน้าจอโฮม" ไม่ได้จำ URL ที่เปิดอยู่ แต่ไปอ่าน
+         start_url จาก manifest — และ Safari อ่านครั้งเดียวตอนโหลดหน้าเท่านั้น
+         เคยลองสลับ href ทีหลังด้วย React แล้ว "ไม่ทัน" ทางลัดยังพาไปหลังบ้าน
+         สคริปต์นี้จึงต้องรันตรงนี้ ระหว่างเบราว์เซอร์กำลังแปลง <head> อยู่
+         ไฟล์ pos-*.webmanifest สร้างจาก scripts/make-pos-manifests.mjs ตอน build -->
+    <script>
+      (function () {
+        var href = "/manifest.webmanifest";
+        try {
+          var p = new URLSearchParams(location.search);
+          var b = p.get("branch");
+          if (p.get("pos") === "1" && b && /^d+$/.test(b)) {
+            href = "/pos-" + b + ".webmanifest";
+            var m = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+            if (m) m.setAttribute("content", "ขายหน้าร้าน");
+          }
+        } catch (e) { /* อ่าน URL ไม่ได้ = ใช้ตัวหลัก ดีกว่าไม่มี manifest เลย */ }
+        var l = document.createElement("link");
+        l.rel = "manifest"; l.href = href;
+        document.head.appendChild(l);
+      })();
+    </script>
     <meta name="theme-color" content="#F2EBE3" />
     <script>
       // ── Lock zoom ───────────────────────────────────────────────────────────

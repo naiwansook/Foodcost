@@ -13,6 +13,7 @@ import fs from "node:fs";
 
 const APP = fs.readFileSync("src/FoodCostApp.jsx", "utf8");
 const AGENT = fs.readFileSync("public/print-agent.js", "utf8");
+const HTML = fs.readFileSync(new URL("../index.html", import.meta.url), "utf8");
 
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
@@ -171,8 +172,11 @@ const guards = [
   ["โหลดซ้ำ กรองตามสาขา", APP.includes("setPrinters(printersAt(d,currentBranch.id))")],
   ["เส้นทาง POS แยก กรองตามสาขา", APP.includes("setPrinters(printersAt(prs,branchId))")],
   // ทางลัดหน้าจอโฮม: iOS อ่าน start_url จาก manifest ไม่ใช่ URL ที่เปิดอยู่
-  ["จอขายสลับ manifest เป็นของสาขาตัวเอง", APP.includes('link.setAttribute("href",`/pos-${+branchId}.webmanifest`)')],
-  ["คืนค่า manifest เดิมตอนออกจากจอขาย", APP.includes('if(link&&prevHref!=null)link.setAttribute("href",prevHref);')],
+  // Safari อ่าน manifest ครั้งเดียวตอนโหลดหน้า — ต้องตัดสินใน index.html
+  // ไม่ใช่สลับทีหลังด้วย React (เคยทำแล้วไม่ทัน ทางลัดยังพาไปหลังบ้าน)
+  ["index.html เลือก manifest ตามเส้นทางเอง", HTML.includes('href = "/pos-" + b + ".webmanifest";')],
+  ["ไม่มีลิงก์ manifest ตายตัวใน HTML แล้ว", !HTML.includes('<link rel="manifest"')],
+  ["React ไม่ไปยุ่งกับ manifest อีก", !APP.includes('link[rel="manifest"]')],
   ["มีสคริปต์สร้าง manifest รายสาขา", fs.existsSync(new URL("./make-pos-manifests.mjs", new URL("../scripts/", import.meta.url)))],
   ["build เรียกสคริปต์สร้าง manifest", JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts.build.includes("make-pos-manifests")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
