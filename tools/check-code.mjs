@@ -371,6 +371,8 @@ const guards = [
     APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(manualDiscount),total,")],
   // ── ป็อปอัพเลื่อนแล้วพื้นหลังต้องอยู่นิ่ง ──
   ["กันเลื่อนทะลุไปพื้นหลัง", APP.includes("div{overscroll-behavior:contain}")],
+  // เปิดจากไอคอนหน้าจอโฮม เนื้อหากินขึ้นไปใต้แถบสถานะ iOS — หัวจอต้องเผื่อไว้
+  ["หัวจอขายไม่ทับเวลา/แบตของ iOS", APP.includes("calc(10px + env(safe-area-inset-top,0px))") && APP.includes("calc(12px + env(safe-area-inset-top,0px))")],
   ["ล็อกหน้าแบบที่ iOS ยอมรับ (ตรึง body ไม่ใช่ overflow:hidden)", APP.includes('b.position="fixed";b.top=') && APP.includes("window.scrollTo(0,_savedScrollY)")],
   ["นับป็อปอัพซ้อน ปลดล็อกเมื่อปิดตัวสุดท้าย", APP.includes("_modalDepth=Math.max(0,_modalDepth-1);") && APP.includes("if(_modalDepth===1){") && APP.includes("if(_modalDepth===0){")],
   ["Modal เรียกตัวล็อก", APP.includes("useScrollLock();") && APP.includes("function useScrollLock(){")],

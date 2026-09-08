@@ -21683,7 +21683,7 @@ function POSPinGate({branchId}){
     const synthUser={id:null,username:seller.name||"พนักงานขาย",name:seller.name||"พนักงานขาย",role:"staff",perms:["pos"]};
     return <><style>{globalStyle}</style>
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
-        <div style={{display:"flex",alignItems:"center",gap:12,padding:isMobile?"10px 14px":"12px 22px",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:"#F8FAFC",flexShrink:0,boxShadow:"0 2px 10px rgba(15,23,42,.25)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,padding:isMobile?"10px 14px":"12px 22px",paddingTop:isMobile?"calc(10px + env(safe-area-inset-top,0px))":"calc(12px + env(safe-area-inset-top,0px))",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:"#F8FAFC",flexShrink:0,boxShadow:"0 2px 10px rgba(15,23,42,.25)"}}>
           <div style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.shop} s={18} c="#fff"/></div>
           <div style={{minWidth:0,flex:1,display:"flex",alignItems:"center",gap:10}}>
             <div style={{minWidth:0}}>
