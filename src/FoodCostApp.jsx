@@ -17232,7 +17232,11 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const vatLine=order.vat>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>VAT ${esc(order.vat_rate||7)}%${order.vat_included?" (รวมในราคา)":""}</span><span>${order.vat_included?"":"+"}฿${(+order.vat).toFixed(2)}</span></div>`:"";
   // PromptPay QR (lazy load via google chart API)
   let qrBlock="";
-  if(posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_id&&!paid){
+  if(posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_qr_image&&!paid){
+    // รูปที่ร้านแนบเอง — ต้องใช้ URL แบบเต็ม เพราะหน้าต่างพิมพ์เป็น about:blank
+    // แปล path สัมพัทธ์ /api/drive-view ไม่ได้ รูปจะไม่ขึ้นแล้วลูกค้าไม่มีอะไรให้สแกน
+    qrBlock=`<div class="line"></div><div style="text-align:center"><div style="font-size:13px;font-weight:700;margin-bottom:2px">สแกนจ่ายเงิน</div><div style="font-size:14px;font-weight:800;margin-bottom:6px">ยอดที่ต้องชำระ ฿${(+order.total||0).toFixed(2)}</div><img src="${esc(driveImgAbs(posSettings.promptpay_qr_image))}" style="width:190px;height:auto"/>${posSettings.promptpay_name?`<div style="font-size:12px;margin-top:4px">${esc(posSettings.promptpay_name)}</div>`:""}</div>`;
+  }else if(posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_id&&!paid){
     const payload=genPromptPayPayload(posSettings.promptpay_id,order.total||0);
     if(payload){
       const qrSrc=`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(payload)}`;
@@ -17344,8 +17348,17 @@ async function btPrint(escData,btName){
 // lines: [{t, size, bold, align:'left'|'center', mb, rule}] · คืนค่าเป็น base64 ของไบต์ ESC/POS พร้อมพิมพ์
 async function escposSlipRaster(lines,width=576,opts={}){
   try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch{}
+  // บรรทัดชนิดรูป ({img,h}) ต้องโหลดเสร็จก่อนวัดความสูง ไม่งั้นใบเบี้ยว/รูปหาย
+  // รูปมาจาก /api/drive-view ซึ่งเป็น same-origin ผ้าใบจึงไม่ถูก taint
+  // (ถ้า taint getImageData จะโยน แล้วใบทั้งใบพิมพ์ไม่ออก ไม่ใช่แค่รูปหาย)
+  const imgCache=new Map();
+  for(const l of lines){
+    if(!l||!l.img||imgCache.has(l.img))continue;
+    try{imgCache.set(l.img,await new Promise((res,rej)=>{const x=new Image();x.onload=()=>res(x);x.onerror=()=>rej(new Error("โหลดรูปไม่ได้"));x.src=l.img;}));}
+    catch{imgCache.set(l.img,null);}   // โหลดไม่ได้ = เว้นที่ไว้ ใบยังออก ดีกว่าไม่ได้ใบเลย
+  }
   const pad=14;
-  const lineH=l=>l.rule?16:Math.round((l.size||28)*1.45)+(l.mb||4);
+  const lineH=l=>l.rule?16:l.img?((l.h||300)+(l.mb||8)):Math.round((l.size||28)*1.45)+(l.mb||4);
   let h=pad*2; lines.forEach(l=>{h+=lineH(l);});
   const cv=document.createElement("canvas");cv.width=width;cv.height=h;
   const ctx=cv.getContext("2d");
@@ -17354,6 +17367,14 @@ async function escposSlipRaster(lines,width=576,opts={}){
   let y=pad;
   for(const l of lines){
     if(l.rule){ctx.fillRect(pad,y+6,width-pad*2,2);y+=lineH(l);continue;}
+    if(l.img){
+      const im=imgCache.get(l.img);
+      if(im&&im.width&&im.height){
+        const H=l.h||300,W=Math.min(width-pad*2,Math.round(im.width*(H/im.height)));
+        ctx.drawImage(im,Math.max(pad,Math.round((width-W)/2)),y,W,H);
+      }
+      y+=lineH(l);continue;
+    }
     const size=l.size||28;ctx.font=`${l.bold?"bold ":""}${size}px 'Sarabun',sans-serif`;
     if(l.l!=null||l.r!=null){   // แถวสองคอลัมน์: ซ้าย(ชื่อ) + ขวา(ราคา) บนบรรทัดเดียว — ราคาชิดขวา ชื่อยาวเกินตัดด้วย …
       const rtxt=l.r!=null?String(l.r):"";const rw=rtxt?ctx.measureText(rtxt).width:0;
@@ -17460,14 +17481,26 @@ async function buildReceiptB64(order,tableNum,branchName,posSettings,paid){
   const lines=buildReceiptLines(order,tableNum,branchName,posSettings,paid);
   let qrBytes=null;
   // QR พร้อมเพย์ โชว์ตอน "ยังไม่ชำระ" เพื่อให้ลูกค้าสแกนจ่าย (จ่ายแล้วไม่ต้องโชว์)
-  if(!paid&&posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_id){
-    const payload=genPromptPayPayload(posSettings.promptpay_id,order.total||0);
-    if(payload){
+  if(!paid&&posSettings&&posSettings.show_qr_promptpay){
+    if(posSettings.promptpay_qr_image){
+      // รูป QR ที่ร้านแนบเอง (บันทึกจากแอปธนาคาร) มาก่อน — เป็นบัญชีที่ร้านยืนยันเองแล้ว
+      // ⚠️ QR แบบรูปไม่มียอดฝังอยู่ ลูกค้าต้องพิมพ์ยอดเอง จึงต้องพิมพ์ยอดตัวโตกำกับไว้
+      // ไม่งั้นลูกค้าเดายอดเอง แล้วร้านได้เงินไม่ตรง
       lines.push({rule:true});
-      lines.push({t:"สแกนพร้อมเพย์เพื่อชำระ",size:22,bold:true,align:"center"});
+      lines.push({t:"สแกนจ่ายเงิน",size:24,bold:true,align:"center",mb:2});
+      lines.push({t:"ยอดที่ต้องชำระ ฿"+(+order.total||0).toFixed(2),size:21,bold:true,align:"center",mb:8});
+      lines.push({img:driveImgSrc(posSettings.promptpay_qr_image),h:320,mb:6});
       if(posSettings.promptpay_name)lines.push({t:stripEmoji(posSettings.promptpay_name),size:18,align:"center"});
-      lines.push({t:String(posSettings.promptpay_id),size:16,align:"center"});
-      qrBytes=escposQRBytes(payload);
+    }else if(posSettings.promptpay_id){
+      // ไม่มีรูปแนบ → สร้าง QR พร้อมเพย์เอง (แบบนี้ยอดฝังอยู่ใน QR ลูกค้าไม่ต้องพิมพ์)
+      const payload=genPromptPayPayload(posSettings.promptpay_id,order.total||0);
+      if(payload){
+        lines.push({rule:true});
+        lines.push({t:"สแกนพร้อมเพย์เพื่อชำระ",size:22,bold:true,align:"center"});
+        if(posSettings.promptpay_name)lines.push({t:stripEmoji(posSettings.promptpay_name),size:18,align:"center"});
+        lines.push({t:String(posSettings.promptpay_id),size:16,align:"center"});
+        qrBytes=escposQRBytes(payload);
+      }
     }
   }
   return await escposSlipRaster(lines,576,qrBytes?{appendBytes:qrBytes}:{});
@@ -18323,6 +18356,18 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(isHttps&&!rcps.length){posToast("⚠️ ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn");return;}
     printReceipt(order,tableNum,branch.name,posSettings,{paid});   // เดสก์ท็อป/LAN (ไม่ใช่ https) → หน้าต่างพิมพ์เบราว์เซอร์
   }
+  // พิมพ์ใบแจ้งยอดพร้อม QR ท้ายใบ ให้ลูกค้าสแกนจ่าย — สั่งจากป็อปอัพเช็คบิล
+  // ใช้ยอด "สด" ชุดเดียวกับที่ป็อปอัพแสดงอยู่ ไม่ใช่ค่าจากแถวบิลที่ยังไม่ปิด
+  // (แถวที่ยังไม่ปิดเก็บแค่ยอดรวมดิบ ไม่มีค่าบริการ/VAT — เคยพิมพ์ QR ยอดน้อยกว่าที่ต้องจ่ายมาแล้ว)
+  function printPayQR(){
+    if(!items.length){alert("ยังไม่มีรายการในบิล");return;}
+    smartPrintReceipt({...(existingOrder||{}),items,payment_method:payMethod,
+      subtotal,discount:round2(manualDiscount),total,
+      service_charge:sc,service_charge_rate:scRate,vat,vat_rate:vatRate,vat_included:vatIncluded,
+      subtotal_after_disc:subAfterDisc,
+      promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,
+      cash_received:null},table.table_number,false);   // false = ยังไม่ชำระ → ใบมี QR ท้ายใบ
+  }
   function reprintReceipt(){
     if(!existingOrder?.id)return;
     const paid=existingOrder.status==="paid";
@@ -18674,7 +18719,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       </div>;
     })()}
 
-    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings}/>}
+    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR}/>}
   </div>;
 }
 
@@ -18684,7 +18729,7 @@ const PAY_METHODS=[
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
-function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null}){
+function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR}){
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
@@ -18764,7 +18809,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
         </div>
         <div style={{display:"flex",gap:8}}>
-          <Btn v="ghost" onClick={onClose} s={{padding:"10px 16px",fontSize:13}}>ยกเลิก</Btn>
+          <Btn v="ghost" onClick={onPrintQR} icon={I.print} s={{padding:"10px 14px",fontSize:13}}>พิมพ์ QR จ่ายเงิน</Btn>
           <Btn v="success" onClick={onPay} loading={saving} full s={{padding:"10px",fontSize:14,fontWeight:800}} icon={I.check}>✅ ยืนยันชำระ & พิมพ์ใบเสร็จ</Btn>
         </div>
       </div>
@@ -19910,7 +19955,15 @@ function POSSettingsPanel({currentBranch}){
             <input value={settings.promptpay_name||""} onChange={e=>set('promptpay_name',e.target.value)} placeholder="เช่น ร้านในวันสุก" style={{...iS,fontSize:14}}/>
           </div>
         </div>
-        {qrPreview&&<div style={{background:C.bg,borderRadius:10,padding:12,display:"flex",alignItems:"center",gap:14}}>
+        <div style={{background:C.bg,borderRadius:10,padding:12,marginBottom:8}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หรือแนบรูป QR ของร้านเอง</div>
+          <div style={{fontSize:11.5,color:C.ink4,marginBottom:10,fontFamily:"'Sarabun',sans-serif",lineHeight:1.65}}>
+            บันทึกรูป QR จากแอปธนาคารมาแนบได้เลย · ถ้าแนบรูปไว้ ใบเสร็จจะใช้รูปนี้แทนการสร้าง QR จากเบอร์<br/>
+            <b style={{color:C.ink3}}>ข้อแตกต่าง:</b> QR ที่สร้างจากเบอร์จะมียอดเงินฝังอยู่ ลูกค้าสแกนแล้วจ่ายได้เลย · ส่วนรูปที่แนบเองไม่มียอดฝัง ลูกค้าต้องพิมพ์ยอดเอง (ใบเสร็จจะพิมพ์ยอดตัวโตกำกับไว้ให้)
+          </div>
+          <ImgUp label="" value={settings.promptpay_qr_image||null} onChange={v=>set('promptpay_qr_image',v)} compact/>
+        </div>
+        {!settings.promptpay_qr_image&&qrPreview&&<div style={{background:C.bg,borderRadius:10,padding:12,display:"flex",alignItems:"center",gap:14}}>
           <QRImg url={qrPreview} size={100}/>
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
             <div style={{fontWeight:700,color:C.green,marginBottom:3}}>✅ QR ใช้งานได้</div>
@@ -20980,7 +21033,9 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       wakeLockRef.current=null;
     };
   },[printStation]);
-  useEffect(()=>{if(refreshTick)loadAll();},[refreshTick]);// eslint-disable-line react-hooks/exhaustive-deps  (refresh button in the kiosk header)
+  // ปุ่มรีเฟรชต้องดึง "ทุกอย่าง" ไม่ใช่แค่ออเดอร์ — พนักงานกดปุ่มนี้ตอนสงสัยว่า
+  // ข้อมูลไม่ตรงกับหลังบ้าน ถ้าดึงแค่ออเดอร์ก็ยังไม่ตรงอยู่ดี แล้วจะงงหนักกว่าเดิม
+  useEffect(()=>{if(refreshTick){loadAll();try{reloadMenus&&reloadMenus();}catch{}try{reloadPosSettings&&reloadPosSettings();}catch{}}},[refreshTick]);// eslint-disable-line react-hooks/exhaustive-deps  (refresh button in the kiosk header)
 
   // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
   const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table}];  // "ออเดอร์วันนี้" replaced by the menu-management dropdown
@@ -21496,6 +21551,28 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   async function loadPosSettings(){try{const s=await api.getPOSSettings(currentBranch.id);setPosSettings(s&&s[0]?s[0]:{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10});}catch{setPosSettings({branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10});}}
   async function loadPromotions(){try{const p=await api.getPromotions(currentBranch.id);setPromotions(p);}catch{setPromotions([]);}}
   useEffect(()=>{loadZones();loadPosSettings();loadPromotions();},[currentBranch.id]);
+
+  // ── หน้าขายกับหลังบ้านต้องเห็นข้อมูลชุดเดียวกัน ─────────────────────────
+  // เดิมหน้าขายโหลดตั้งค่า/เมนูครั้งเดียวตอนเปิดหน้า แล้วไม่โหลดอีกเลย
+  // แก้ VAT / ค่าบริการ / QR จ่ายเงิน / ราคาเมนู ที่หลังบ้าน เครื่องขายจะยังใช้ค่าเก่า
+  // จนกว่าพนักงานจะรีโหลดหน้าเอง — ซึ่งไม่มีใครรู้ว่าต้องทำ = คิดเงินผิดเงียบๆ
+  //
+  // ตั้งค่า/โปรโมชั่น/โซน/เครื่องพิมพ์ = แถวเล็ก ดึงถี่ได้ (60 วิ)
+  // เมนูเป็นก้อนใหญ่ (~300 KB) ดึงห่างกว่า (5 นาที) — ราคาไม่ได้เปลี่ยนกลางมื้อ
+  // ทุกตัวหยุดเมื่อสลับแท็บออก และดึงทันทีเมื่อกลับมาที่หน้าจอ
+  useEffect(()=>{
+    let n=0;
+    const light=()=>{loadPosSettings();loadPromotions();loadZones();try{reloadPrinters&&reloadPrinters();}catch{}};
+    const heavy=()=>{try{reloadMenus&&reloadMenus();}catch{}};
+    const t=setInterval(()=>{
+      if(document.hidden)return;
+      light();
+      if(++n%5===0)heavy();   // ทุก 5 รอบ = 5 นาที
+    },60000);
+    const onVis=()=>{if(!document.hidden){light();heavy();}};
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{clearInterval(t);document.removeEventListener("visibilitychange",onVis);};
+  },[currentBranch.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     if(mode!=='sale'){setShift(null);return;}
