@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 30;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 31;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -186,10 +186,27 @@ function sendToPrinter(ip, port, buf) {
 
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
-try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
+// อ่านสำเร็จจริงไหม ไม่ใช่แค่ "ไฟล์มีอยู่" — ไฟดับกลางเขียนทำให้ไฟล์พังได้
+let stateLoaded = false;
+try { if (fs.existsSync(STATE_FILE)) { state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); stateLoaded = true; } } catch { console.log("⚠️  ไฟล์ความจำเสียหาย (ไฟดับกลางเขียน?) — เริ่มจำใหม่ ไม่พิมพ์ย้อนหลัง"); }
 if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.tries) state.tries = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
-let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
-function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
+// ⚠️ ต้องดู "อ่านความจำได้ไหม" ไม่ใช่ "ไฟล์มีอยู่ไหม"
+// ไฟล์พังแต่ยังอยู่ = ความจำว่างเปล่าแต่คิดว่าจำได้ → ทุกบิลที่เปิดอยู่กลายเป็น
+// บิลใหม่หมด แล้วพิมพ์ซ้ำทั้งร้าน (เกิดได้จริงตอนแบตหมดกลางจังหวะเขียนไฟล์)
+// อ่านไม่ได้ = ถือว่ายังไม่เคยจำ → prime ใหม่ (บันทึกว่าเห็นแล้ว ไม่พิมพ์)
+// ยอมเสี่ยงว่าบิลที่เพิ่งสั่งตอนนั้นอาจไม่ได้ใบ ดีกว่าพิมพ์ซ้ำทั้งร้าน
+// (พนักงานกดพิมพ์ซ้ำรายรายการได้ แต่กระดาษที่ทะลักออกมาเอาคืนไม่ได้)
+let primed = stateLoaded;
+// เขียนแบบปลอดภัยต่อไฟดับ: เขียนลงไฟล์ชั่วคราวให้เสร็จก่อน แล้วค่อยสลับชื่อ
+// การสลับชื่อเป็นการกระทำที่สำเร็จหรือไม่สำเร็จอย่างเดียว ไม่มีครึ่งๆ กลางๆ
+// เขียนทับตรงๆ แล้วไฟดับกลางทาง = ได้ไฟล์ที่พังและอ่านไม่ออก
+function saveState() {
+  try {
+    const tmp = STATE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, STATE_FILE);
+  } catch {}
+}
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
 // รวมจำนวนตามคีย์ก่อนเทียบเสมอ — ห้ามใช้ new Map(entries) ตรงๆ เพราะคีย์ซ้ำจะ "ทับกัน"
 // ไม่ใช่บวกกัน (posAppendItems ต่อเมนูเดิมเป็นแถวใหม่ ไม่รวมแถว) ถ้าทับกันแล้ว

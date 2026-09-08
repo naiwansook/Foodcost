@@ -304,6 +304,29 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("orphan ไม่นับเป็นความล้มเหลว (ลองใหม่ก็ไม่หาย)", !SRC.includes("orphan.length === 0"));
 }
 
+
+// ── ไฟดับจนแบตหมด แล้วไฟล์ความจำพัง (บั๊กจริง หาเจอ 8 ก.ย. 69) ──────────
+// เดิม primed ดูแค่ "ไฟล์มีอยู่ไหม" ไม่ได้ดูว่า "อ่านได้ไหม"
+// ไฟล์พังแต่ยังอยู่ = ความจำว่างแต่คิดว่าจำได้ → ทุกบิลกลายเป็นบิลใหม่ → พิมพ์ซ้ำทั้งร้าน
+{
+  ok_("ไฟล์ความจำพังต้องไม่ทำให้พิมพ์ซ้ำทั้งร้าน", SRC.includes("let primed = stateLoaded;"));
+  ok_("แยก 'อ่านได้จริง' ออกจาก 'ไฟล์มีอยู่'",
+    SRC.includes("let stateLoaded = false;") && SRC.includes("stateLoaded = true;"));
+  ok_("ไม่เหลือการเช็คแบบเก่าที่ดูแค่ไฟล์มีอยู่", !SRC.includes("let primed = fs.existsSync(STATE_FILE)"));
+  ok_("เขียนไฟล์แบบทนไฟดับ (เขียนชั่วคราวแล้วสลับชื่อ)",
+    SRC.includes("const tmp = STATE_FILE") && SRC.includes("fs.renameSync(tmp, STATE_FILE)"));
+  ok_("ไม่เขียนทับไฟล์จริงตรงๆ อีกแล้ว", !SRC.includes("fs.writeFileSync(STATE_FILE, JSON.stringify(state))"));
+
+  // จำลองพฤติกรรม: ไฟล์อ่านได้ = ไม่ prime · อ่านไม่ได้ = prime (ไม่พิมพ์ย้อนหลัง)
+  const primedOf = (canRead) => {
+    let stateLoaded = false;
+    try { if (true) { if (!canRead) throw new Error("พัง"); stateLoaded = true; } } catch {}
+    return stateLoaded;
+  };
+  ok_("ไฟล์ดี = ไม่ prime ใหม่ (ไม่พิมพ์ซ้ำของเก่า)", primedOf(true) === true);
+  ok_("ไฟล์พัง = prime ใหม่ (บันทึกว่าเห็นแล้ว ไม่พิมพ์)", primedOf(false) === false);
+}
+
 console.log("\n" + "=".repeat(52));
 console.log(fail === 0 ? "OK ผ่านทั้งหมด " + pass + " ข้อ" : "FAIL ล้มเหลว " + fail + " ข้อ (ผ่าน " + pass + ")");
 process.exitCode = fail ? 1 : 0;
