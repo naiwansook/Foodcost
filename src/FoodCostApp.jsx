@@ -21223,11 +21223,15 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     if(conn.type==="bluetooth"){setStatus(s=>({...s,[p.id]:"bt"}));return;}
     if(isHttps){   // iPad/https เช็คตรงไม่ได้ — อ่านสถานะที่ตัวพิมพ์ (agent) ping แล้วรายงานไว้ใน description.on (อัปเดตทุก 30 วิ)
       let d={};try{d=JSON.parse(p.description||"{}");}catch{}
-      // ต้องดูอายุของสถานะด้วย — ตัวพิมพ์เขียน on/onAt ทุกครั้งที่ ping
-      // ถ้าค่าเก่าเกิน 3 นาที แปลว่าตัวพิมพ์ไม่ได้รายงานมาแล้ว = ถือว่าออฟไลน์
-      const age=d.onAt?Date.now()-(+d.onAt||0):Infinity;
-      const fresh=age<3*60*1000;
-      setStatus(s=>({...s,[p.id]:(d.on===1&&fresh)?"online":(d.on===1&&!fresh)?"stale":"offline"}));return;
+      // ⚠️ ห้ามตัดสินจากอายุของ onAt — ตัวพิมพ์เขียน on/onAt "เฉพาะตอนสถานะเปลี่ยน"
+      // (ตั้งใจ เพื่อลดจำนวนการเขียน) เครื่องที่ต่อติดนิ่งๆ มาครึ่งชั่วโมงจึงมี onAt เก่า
+      // ถ้าดูอายุของมันจะขึ้น "ตัวพิมพ์อาจหยุด" ทั้งที่ทุกอย่างปกติ — ตกใจฟรี
+      //
+      // สัญญาณชีพของตัวพิมพ์คือ agentSeen ซึ่งเขียนทุกจังหวะหัวใจ ใช้ตัวนั้นตัดสิน
+      // ตัวพิมพ์ยังหายใจ = เชื่อค่า on ตามที่มันรายงาน · ไม่หายใจ = ไม่รู้สถานะจริง
+      const h=agentHealth(printers,currentBranch?.id);
+      const agentOk=h.state==="ok";
+      setStatus(s=>({...s,[p.id]:!agentOk?"stale":(d.on===1?"online":"offline")}));return;
     }
     setStatus(s=>({...s,[p.id]:"testing"}));
     const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),6000);
