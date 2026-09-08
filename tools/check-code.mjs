@@ -135,6 +135,21 @@ const thCmpOf = (() => {
 })();
 const thSort = (arr) => [...arr].sort(thCmpOf);
 
+// ── ดึงตัวจับ "คอลัมน์ยังไม่มี" ตัวจริงมารัน ─────────────────────────────
+// ถ้าจับไม่ติด ยกเลิกบิลจะพังทั้งใบจนกว่าจะรัน SQL — ร้านปิดโต๊ะไม่ได้กลางวันเปิด
+// ถ้าจับกว้างไป เน็ตหลุดก็จะถูกนับเป็น "คอลัมน์ไม่มี" แล้วยกเลิกแบบไร้ร่องรอยเงียบๆ
+const schemaErrRe = (() => {
+  const ln = APP.split("\n").find(l => l.includes("const schemaErr=/"));
+  if (!ln) throw new Error("ไม่เจอตัวจับ schema error");
+  return new Function("err", ln.trim() + " return schemaErr;");   // บรรทัดจริงอ้างตัวแปรชื่อ err
+})();
+// ── ดึงตัวเลือกรายการบิลในรายงานยอดขายมารัน ──────────────────────────────
+const baseListOf = (() => {
+  const ln = APP.split("\n").find(l => l.includes("const baseList=filter==="));
+  if (!ln) throw new Error("ไม่เจอตัวเลือกรายการบิล");
+  return new Function("filter", "paid", "unpaid", "cancelled", ln.trim() + " return baseList;");
+})();
+
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
 const ck = (label, got, want) => {
@@ -513,6 +528,54 @@ const guards = [
   // ยอด 0 จะได้ QR แบบไม่ล็อกยอด (tag 01 = 11) ซึ่งลูกค้ากรอกเองได้ตามใจ — ไม่พิมพ์เลยดีกว่า
   ["บิลยอด 0 ไม่พิมพ์ QR ออกมา", APP.split("posSettings.show_qr_promptpay&&(+order.total||0)>0").length - 1 === 1
     && APP.includes("posSettings.show_qr_promptpay&&!paid&&(+order.total||0)>0")],
+  // ── ร่องรอยการยกเลิกบิล (เจ้าของสั่ง: กินเงินสดแล้วกดยกเลิกต้องมีร่องรอย) ──
+  // ยกเลิกบิลคือทางที่เงินสดหายเงียบที่สุด กด OK เฉยๆ ไม่พอ ต้องบอกได้ว่าใครและทำไม
+  ["ยกเลิกบิลต้องผ่านกล่องถามเหตุผล ไม่ใช่แค่กดยืนยัน",
+    APP.includes("const reason=await reasonDlg({") && APP.includes("if(reason==null)return;")],
+  ["ไม่มีเหตุผล = ปุ่มยืนยันกดไม่ได้", APP.includes("disabled={!val}") && APP.includes("onClick={()=>{if(val)close(val);}}")],
+  ["บันทึกครบทั้งคนยกเลิก เวลา และเหตุผล",
+    APP.includes("const full={...base,cancelled_by:who,cancelled_at:at,cancel_reason:reason};")],
+  ["บันทึกว่าใครปิดบิล", APP.includes("cash_received:cashReceived,paid_by:currentUser?.username||currentUser?.name||null}")],
+  // กล่องเหตุผลต้องขึ้นทุกจุดที่ mount <ConfirmDlg/> (มี 4 จุด) ถ้าลืมจุดใดจุดหนึ่ง
+  // reasonDlg จะคืน null เงียบๆ = กดยกเลิกบิลแล้วไม่เกิดอะไรขึ้น ไม่มี error ให้เห็น
+  ["กล่องเหตุผลผูกติดกล่องยืนยัน ไม่ต้องไล่ mount เอง",
+    APP.includes("function ConfirmDlg(){return <><ConfirmBox/><ReasonBox/></>;}")
+    && APP.split("<ConfirmDlg/>").length - 1 === 4
+    && !APP.includes("<ReasonBox/>;")],
+  // คอลัมน์ยังไม่มี = ต้องยอมให้ยกเลิกได้ (ร้านต้องเดินต่อ) แต่ต้องเตือนดังๆ ไม่ใช่เงียบ
+  ["คอลัมน์ยังไม่มีก็ยังยกเลิกได้ แต่ต้องเตือน",
+    APP.includes("row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,base);")
+    && APP.includes("แต่ยังบันทึกผู้ยกเลิก/เหตุผลไม่ได้")],
+  ["จับข้อความ 'คอลัมน์ยังไม่มี' ได้ทุกแบบที่ PostgREST ส่งมา",
+    ["PGRST204",
+     'column "cancelled_by" of relation "orders" does not exist',
+     "Could not find the 'cancel_reason' column of 'orders' in the schema cache"]
+      .every(m => schemaErrRe(m) === true)],
+  // เน็ตหลุดต้องไม่ถูกนับเป็น "คอลัมน์ไม่มี" ไม่งั้นจะยกเลิกซ้ำแบบไร้ร่องรอย
+  ["เน็ตหลุด/ผิดพลาดอื่นต้องไม่ถูกนับเป็นคอลัมน์ไม่มี",
+    ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource", "timeout of 15000ms exceeded"]
+      .every(m => schemaErrRe(m) === false)],
+  // ── บิลที่ยกเลิกต้องกดดูย้อนหลังได้ ──
+  // เดิมถูกกรองทิ้งทุกตัวกรอง เหลือแค่ตัวเลขนับมุมขวา = มีร่องรอยแต่ไม่มีใครเห็น
+  ["แท็บ 'ยกเลิก' เปิดดูบิลที่ยกเลิกได้จริง", (() => {
+    const P_ = [{ id: 1 }], U_ = [{ id: 2 }], X_ = [{ id: 3 }, { id: 4 }];
+    const got = baseListOf("cancelled", P_, U_, X_);
+    return got.length === 2 && got.every(o => X_.includes(o));
+  })()],
+  ["แท็บ 'ทั้งหมด' รวมบิลที่ยกเลิกด้วย", (() => {
+    const got = baseListOf("all", [{ id: 1 }], [{ id: 2 }], [{ id: 3 }]);
+    return got.length === 3;
+  })()],
+  ["แท็บ 'ปิดบิลแล้ว' ยังไม่ปนบิลที่ยกเลิก", (() => {
+    const P_ = [{ id: 1 }];
+    const got = baseListOf("paid", P_, [{ id: 2 }], [{ id: 3 }]);
+    return got.length === 1 && got[0] === P_[0];
+  })()],
+  ["รายงานยอดขายไม่นับบิลที่ยกเลิกเป็นรายได้",
+    APP.includes("const rev=paid.reduce((s,o)=>s+(+o.total||0),0);")
+    && APP.includes('const paid=orders.filter(o=>o.status==="paid");')],
+  ["บิลเก่าที่ไม่มีบันทึกต้องบอกตรงๆ ว่าไม่มี ไม่ใช่เว้นว่าง",
+    APP.includes("— ไม่มีบันทึก (ยกเลิกก่อนเปิดระบบบันทึก) —")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

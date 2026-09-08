@@ -2090,7 +2090,7 @@ function confirmDlg(opts){
     _confirmOpener(typeof opts==="string"?{message:opts}:opts,resolve);
   });
 }
-function ConfirmDlg(){
+function ConfirmBox(){
   const[st,setSt]=useState(null);
   const stRef=useRef(null);
   stRef.current=st;
@@ -2138,6 +2138,62 @@ function ConfirmDlg(){
     </div>
   </div>;
 }
+let _reasonOpener=null;
+// กล่องถาม "ทำไม" — ต่างจาก confirmDlg ตรงที่คืนค่าเป็นข้อความเหตุผล ไม่ใช่แค่ใช่/ไม่ใช่
+// ใช้กับการกระทำที่ต้องตรวจย้อนหลังได้ว่าใครทำและทำไม
+// คืน null = ผู้ใช้ถอย · คืนข้อความ = ยืนยันพร้อมเหตุผล (ว่างไม่ได้ ปุ่มยืนยันจะกดไม่ได้)
+function reasonDlg(opts){
+  return new Promise(resolve=>{
+    // ยังไม่ mount = ถือว่าไม่ทำ ดีกว่าปล่อยให้ทำโดยไม่มีร่องรอย
+    if(!_reasonOpener)return resolve(null);
+    _reasonOpener(opts||{},resolve);
+  });
+}
+function ReasonBox(){
+  const[st,setSt]=useState(null);
+  const[txt,setTxt]=useState("");
+  const stRef=useRef(null);
+  stRef.current=st;
+  useEffect(()=>{
+    _reasonOpener=(opts,resolve)=>{
+      // กล่องเดิมค้างอยู่แล้วมีกล่องใหม่มาแทน — ต้องปลด await ของเดิม ไม่งั้นค้างตลอดกาล
+      const prev=stRef.current;
+      if(prev&&prev.resolve){try{prev.resolve(null);}catch{}}
+      setTxt("");setSt({opts,resolve});
+    };
+    return()=>{_reasonOpener=null;};
+  },[]);
+  if(!st)return null;
+  const o=st.opts;
+  const close=v=>{const r=st.resolve;setSt(null);setTxt("");r(v);};
+  const val=txt.trim();
+  const presets=Array.isArray(o.presets)?o.presets:[];
+  const swallow=e=>{if(e.target===e.currentTarget){e.preventDefault();e.stopPropagation();}};
+  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,440px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
+      <div style={{padding:"22px 22px 12px",textAlign:"center",flexShrink:0}}>
+        <div style={{width:56,height:56,margin:"0 auto 12px",borderRadius:"50%",background:C.redLight,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${C.red}22`}}><Ic d={I.trash} s={25} c={C.red} sw={2}/></div>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:6,letterSpacing:-.3}}>{o.title||"ระบุเหตุผล"}</div>
+        {o.message&&<div style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,whiteSpace:"pre-line"}}>{o.message}</div>}
+      </div>
+      <div style={{padding:"0 20px 8px",overflowY:"auto"}}>
+        {presets.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+          {presets.map(p=>{const on=val===p;return <button key={p} onClick={()=>setTxt(p)} style={{padding:"7px 13px",borderRadius:18,border:`1px solid ${on?C.red:C.line}`,background:on?C.redLight:C.white,color:on?C.red:C.ink2,cursor:"pointer",fontSize:12.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{p}</button>;})}
+        </div>}
+        <textarea value={txt} onChange={e=>setTxt(e.target.value)} rows={2} placeholder={o.placeholder||"พิมพ์เหตุผล..."} style={{width:"100%",padding:"11px 13px",borderRadius:12,border:`1.5px solid ${C.line}`,fontSize:14,fontFamily:"'Sarabun',sans-serif",color:C.ink,resize:"vertical",lineHeight:1.5}}/>
+        <div style={{fontSize:11,color:val?C.ink4:C.red,fontFamily:"'Sarabun',sans-serif",marginTop:4,minHeight:15}}>{val?`${val.length} ตัวอักษร`:"ต้องระบุเหตุผลก่อนถึงจะยืนยันได้"}</div>
+      </div>
+      <div style={{display:"flex",gap:8,padding:"6px 18px 18px",flexWrap:"wrap",flexShrink:0}}>
+        <button onClick={()=>close(null)} style={{flex:"1 1 120px",minHeight:46,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,color:C.ink2,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{o.cancelLabel||"ไม่ยกเลิก"}</button>
+        <button onClick={()=>{if(val)close(val);}} disabled={!val} style={{flex:"1 1 120px",minHeight:46,padding:"12px 16px",borderRadius:12,border:"none",background:val?`linear-gradient(135deg,${C.red},#DC2626)`:C.line,color:C.white,fontSize:14,fontWeight:800,cursor:val?"pointer":"not-allowed",fontFamily:"'Sarabun',sans-serif",boxShadow:val?`0 8px 20px ${C.red}55`:"none"}}>{o.confirmLabel||"ยืนยัน"}</button>
+      </div>
+    </div>
+  </div>;
+}
+// จุด mount เดียวของทั้งสองกล่อง — ตัว ConfirmDlg ถูกวางไว้ 4 ที่ในแอป
+// ถ้าให้แต่ละที่ mount เอง วันหนึ่งจะลืมที่ใดที่หนึ่ง แล้วกล่องเหตุผลจะเงียบไปเฉยๆ
+// (reasonDlg คืน null = ยกเลิกบิลไม่ทำงาน โดยไม่มี error ให้เห็น)
+function ConfirmDlg(){return <><ConfirmBox/><ReasonBox/></>;}
 function EditedBy({username,editAt}){if(!username)return null;return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${fmtDT(editAt)}`:""}</span>;}
 function Loading({text="กำลังโหลด..."}){return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"80px 0",gap:16}}><div style={{width:44,height:44,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{text}</p></div>;}
 
@@ -18361,9 +18417,32 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   async function cancelOrder(){
     if(!existingOrder?.id)return;
     if(existingOrder.status==="paid"){alert("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
-    if(!await confirmDlg({message:`ยกเลิกออเดอร์ทั้งหมดของโต๊ะ ${table.table_number}?`,title:"ยกเลิกออเดอร์",confirmLabel:"ยกเลิกออเดอร์",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
+    // ยกเลิกบิลคือทางที่เงินสดหายได้เงียบที่สุด: เก็บเงินลูกค้า → กดยกเลิก → ลิ้นชักตรงเป๊ะ
+    // เลยต้องมีเหตุผลทุกครั้ง และต้องรู้ว่าใครกด ไม่งั้นไม่มีอะไรให้ตรวจย้อนหลังเลย
+    const reason=await reasonDlg({
+      title:`ยกเลิกบิล — โต๊ะ ${table.table_number}`,
+      message:`ยอด ฿${(+total||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})} · ${items.length} รายการ\nระบบจะบันทึกชื่อผู้ยกเลิก เวลา และเหตุผลไว้ ดูย้อนหลังได้ที่รายงานยอดขาย`,
+      presets:["ลูกค้าไม่มา","เปิดโต๊ะผิด","กดสั่งผิด","ลูกค้ายกเลิกรายการ","ย้ายไปรวมโต๊ะอื่น"],
+      confirmLabel:"ยืนยันยกเลิกบิล",
+      cancelLabel:"ไม่ยกเลิก",
+    });
+    if(reason==null)return;
     try{
-      const row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,{status:"cancelled",updated_at:new Date().toISOString()});
+      const at=new Date().toISOString();
+      const who=currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ";
+      const base={status:"cancelled",updated_at:at};
+      const full={...base,cancelled_by:who,cancelled_at:at,cancel_reason:reason};
+      let row;
+      try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,full);}
+      catch(err){
+        // คอลัมน์บันทึกยังไม่ได้สร้าง (ยังไม่ได้รันคำสั่ง SQL) — PostgREST ปฏิเสธก่อนเขียน
+        // ยอมให้ยกเลิกได้ก่อน ร้านต้องเดินต่อ แต่ต้องบอกดังๆ ว่าครั้งนี้ไม่มีร่องรอย
+        // เงียบไปเฉยๆ = คิดว่ามีบันทึกทั้งที่ไม่มี ซึ่งแย่กว่ารู้ว่าไม่มี
+        const schemaErr=/column .* does not exist|PGRST204|schema cache/i.test(String((err&&err.message)||err));
+        if(!schemaErr)throw err;
+        row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,base);
+        posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังบันทึกผู้ยกเลิก/เหตุผลไม่ได้ — ต้องเพิ่มคอลัมน์ในฐานข้อมูลก่อน","warn");
+      }
       if(!row){alert("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ แล้วลองยกเลิกอีกครั้ง");onDone();onClose();return;}
       onDone();onClose();
     }catch(e){alert("เกิดข้อผิดพลาด: "+friendlyError(e));}
@@ -18467,7 +18546,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // Base fields (always exist) + full breakdown (needs the migration). If the
       // breakdown columns aren't there yet, fall back to base so the sale never fails.
       const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()};
-      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived};
+      // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
+      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,paid_by:currentUser?.username||currentUser?.name||null};
       let row;
       try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload);}
       catch(err){
@@ -21496,6 +21576,15 @@ function BillDetailCard({order,onBack}){
         </div>
         <span style={{fontSize:12,fontWeight:800,color:stC[o.status]||C.ink3,background:`${stC[o.status]||C.ink3}22`,padding:"4px 12px",borderRadius:20,fontFamily:"'Sarabun',sans-serif"}}>{stL[o.status]||o.status}</span>
       </div>
+      {o.status==="cancelled"&&<div style={{padding:"11px 18px",background:C.redLight,borderBottom:`1px solid ${C.red}33`,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:12.5,fontWeight:900,color:C.red,marginBottom:3}}>🗑️ บิลนี้ถูกยกเลิก</div>
+        <div style={{fontSize:12,color:"#991B1B",lineHeight:1.7}}>
+          <div>ผู้ยกเลิก: <b>{o.cancelled_by||"— ไม่มีบันทึก (ยกเลิกก่อนเปิดระบบบันทึก) —"}</b></div>
+          {o.cancelled_at&&<div>เวลา: {fmtDT(o.cancelled_at)}</div>}
+          <div>เหตุผล: {o.cancel_reason||"— ไม่ได้ระบุ —"}</div>
+        </div>
+      </div>}
+      {paid&&o.paid_by&&<div style={{padding:"8px 18px",background:C.greenLight,borderBottom:`1px solid ${C.green}33`,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:"#0F6E56"}}>ปิดบิลโดย <b>{o.paid_by}</b></div>}
       <div style={{padding:"14px 18px"}}>
         {items.length===0?<div style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13,textAlign:"center",padding:"10px 0"}}>ไม่มีรายการอาหาร</div>:items.map((i,idx)=>{
           const disc=+i.item_discount||0;
@@ -21553,7 +21642,9 @@ function SalesReportModal({currentBranch,onClose}){
   const rev=paid.reduce((s,o)=>s+(+o.total||0),0);
   const avg=paid.length?rev/paid.length:0;
   const payBreak=Object.entries(paid.reduce((mm,o)=>{const k=o.payment_method||"other";if(!mm[k])mm[k]={sum:0,n:0};mm[k].sum+=(+o.total||0);mm[k].n+=1;return mm;},{})).sort((a,b)=>b[1].sum-a[1].sum);
-  const baseList=filter==="paid"?paid:filter==="unpaid"?unpaid:[...paid,...unpaid];
+  // เดิมบิลที่ยกเลิกถูกกรองทิ้งทุกตัวกรอง เหลือแค่ตัวเลขนับมุมขวา — กดดูไม่ได้เลย
+  // ซึ่งแปลว่ากินเงินสดแล้วกดยกเลิกจะไม่มีใครเห็นอะไรเลย ต้องเปิดให้ดูได้
+  const baseList=filter==="paid"?paid:filter==="unpaid"?unpaid:filter==="cancelled"?cancelled:[...paid,...unpaid,...cancelled];
   const list=baseList.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
   const m=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:0});
 
@@ -21591,8 +21682,7 @@ function SalesReportModal({currentBranch,onClose}){
       </div>}
       {/* ── ตัวกรอง: ทั้งหมด / ปิดบิลแล้ว / ยังไม่ปิดบิล ── */}
       <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-        {[{id:"all",l:"ทั้งหมด",n:paid.length+unpaid.length},{id:"paid",l:"ปิดบิลแล้ว",n:paid.length},{id:"unpaid",l:"ยังไม่ปิดบิล",n:unpaid.length}].map(t=>{const on=filter===t.id;return <button key={t.id} onClick={()=>setFilter(t.id)} style={{padding:"7px 14px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:12.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{t.l} ({t.n})</button>;})}
-        {cancelled.length>0&&<span style={{marginLeft:"auto",fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยกเลิก {cancelled.length} บิล</span>}
+        {[{id:"all",l:"ทั้งหมด",n:paid.length+unpaid.length+cancelled.length},{id:"paid",l:"ปิดบิลแล้ว",n:paid.length},{id:"unpaid",l:"ยังไม่ปิดบิล",n:unpaid.length},{id:"cancelled",l:"🗑️ ยกเลิก",n:cancelled.length,warn:true}].map(t=>{const on=filter===t.id;const ac=t.warn?C.red:C.brand;return <button key={t.id} onClick={()=>setFilter(t.id)} style={{padding:"7px 14px",borderRadius:20,border:`1px solid ${on?ac:(t.warn&&t.n>0?`${C.red}66`:C.line)}`,background:on?ac:C.white,color:on?C.white:(t.warn&&t.n>0?C.red:C.ink2),cursor:"pointer",fontSize:12.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{t.l} ({t.n})</button>;})}
       </div>
       {/* ── รายการบิล (กดเข้าดูรายละเอียด) ── */}
       {list.length===0?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4}}><Ic d={I.order} s={46} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีบิลในวันนี้</p></div>
@@ -21603,6 +21693,10 @@ function SalesReportModal({currentBranch,onClose}){
             <span style={{fontSize:11,fontWeight:700,color:stC[o.status]||C.ink3,background:`${stC[o.status]||C.ink3}22`,padding:"2px 8px",borderRadius:20}}>{stL[o.status]||o.status}</span>
           </div>
           <div style={{padding:"9px 12px"}}>
+            {o.status==="cancelled"&&<div style={{background:C.redLight,border:`1px solid ${C.red}33`,borderRadius:8,padding:"6px 9px",marginBottom:7,fontSize:11,color:C.red,lineHeight:1.5}}>
+              <div style={{fontWeight:800}}>ยกเลิกโดย {o.cancelled_by||"— ไม่มีบันทึก —"}</div>
+              {o.cancel_reason&&<div style={{color:"#991B1B"}}>เหตุผล: {o.cancel_reason}</div>}
+            </div>}
             {(o.items||[]).slice(0,3).map((i,idx)=><div key={idx} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:2,gap:8}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i.qty}x {i.name}</span><span style={{color:C.brand,fontWeight:700,whiteSpace:"nowrap"}}>฿{m((+i.price||0)*(+i.qty||0))}</span></div>)}
             {(o.items||[]).length>3&&<div style={{fontSize:11,color:C.ink4}}>+อีก {o.items.length-3} รายการ</div>}
             {(o.items||[]).length===0&&<div style={{fontSize:11.5,color:C.ink4}}>ไม่มีรายการ</div>}
