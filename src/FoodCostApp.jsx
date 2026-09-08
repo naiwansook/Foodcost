@@ -17258,6 +17258,36 @@ function buildKitchenESC(item,tableNum){
 }
 // ESC/POS table-QR slip — uses the printer's NATIVE QR command (GS ( k) so a
 // thermal printer renders the code directly, no browser dialog. data = scan URL.
+// ── ใบ QR โต๊ะ แบบ "ไทยคมชัด" ────────────────────────────────────────────
+// เดิมส่งข้อความไทยเป็น UTF-8 ตรงเข้าเครื่องพิมพ์ (buildTableQRESC ด้านล่าง)
+// เครื่องความร้อนอ่าน UTF-8 ไม่ออก ส่วนทางที่ผ่านตัวพิมพ์ก็ใช้ TIS-620 ซึ่งรุ่นที่ร้าน
+// ใช้วางสระบน/ล่างกับวรรณยุกต์ผิดตำแหน่ง — "บุรี" "โต๊ะ" "เพื่อดูเมนูและสั่ง" เพี้ยนหมด
+//
+// เลิกสู้กับ quirk รายรุ่น ใช้ทางเดียวกับใบเสร็จซึ่งพิสูจน์แล้วว่าไทยถูก 100%:
+// วาดตัวอักษรด้วยฟอนต์ Sarabun ลงผ้าใบแล้วส่งเป็นรูปขาวดำ ส่วน QR ยังใช้คำสั่ง
+// เนทีฟของเครื่อง (คมชัดกว่าและสแกนติดแน่นอน) คั่นกลางระหว่างหัวกับท้าย
+async function buildTableQRB64(table,branch,url){
+  const head=[
+    ...(branch&&branch.name?[{t:stripEmoji(branch.name),size:26,align:"center",mb:6}]:[]),
+    {t:"โต๊ะ "+(table.table_number||""),size:46,bold:true,align:"center",mb:8},
+    ...(table.label?[{t:stripEmoji(table.label),size:22,align:"center",mb:6}]:[]),
+  ];
+  const foot=[
+    {t:"สแกนเพื่อดูเมนูและสั่งอาหาร",size:25,bold:true,align:"center",mb:2},
+    {t:"Scan to order",size:20,align:"center"},
+  ];
+  const parts=[
+    b64Bytes(await escposSlipRaster(head,576,{noCut:true})),
+    new Uint8Array(escposQRBytes(url)),
+    b64Bytes(await escposSlipRaster(foot,576,{noInit:true})),
+  ];
+  const total=parts.reduce((n,p)=>n+p.length,0);
+  const out=new Uint8Array(total);let off=0;
+  for(const p of parts){out.set(p,off);off+=p.length;}
+  let bin="";for(let i=0;i<out.length;i++)bin+=String.fromCharCode(out[i]);
+  return btoa(bin);
+}
+// เก็บไว้เผื่อเครื่องบลูทูธรุ่นเก่าที่รับ raster ไม่ได้ — ไม่ใช่ทางหลักแล้ว
 function buildTableQRESC(table,branch,url){
   const enc=new TextEncoder();const bufs=[];
   const b=(...bytes)=>bufs.push(new Uint8Array(bytes));
@@ -17331,9 +17361,10 @@ async function escposSlipRaster(lines,width=576,opts={}){
   const data=ctx.getImageData(0,0,width,h).data;
   const bpr=Math.ceil(width/8);const ras=new Uint8Array(bpr*h);
   for(let yy=0;yy<h;yy++)for(let xx=0;xx<width;xx++){const i=(yy*width+xx)*4;const lum=data[i]*0.299+data[i+1]*0.587+data[i+2]*0.114;const a=data[i+3];if(a>40&&lum<128)ras[yy*bpr+(xx>>3)]|=(0x80>>(xx&7));}
-  const head=[0x1b,0x40,0x1b,0x61,0x00,0x1d,0x76,0x30,0x00,bpr&0xff,(bpr>>8)&0xff,h&0xff,(h>>8)&0xff];
+  // noInit = ไม่ต้องสั่ง init ซ้ำ (ใช้กับชิ้นที่ 2 ขึ้นไป) · noCut = ยังไม่ตัดกระดาษ
+  const head=[...(opts&&opts.noInit?[]:[0x1b,0x40]),0x1b,0x61,0x00,0x1d,0x76,0x30,0x00,bpr&0xff,(bpr>>8)&0xff,h&0xff,(h>>8)&0xff];
   const extra=opts&&opts.appendBytes?Array.from(opts.appendBytes):[];   // ไบต์เสริม (เช่น QR เนทีฟ) แทรกก่อนป้อน/ตัดกระดาษ
-  const tail=[0x0a,0x0a,0x0a,0x1d,0x56,0x41,0x00];
+  const tail=opts&&opts.noCut?[]:[0x0a,0x0a,0x0a,0x1d,0x56,0x41,0x00];
   const out=new Uint8Array(head.length+ras.length+extra.length+tail.length);
   out.set(head,0);out.set(ras,head.length);
   if(extra.length)out.set(extra,head.length+ras.length);
@@ -17345,6 +17376,8 @@ async function escposSlipRaster(lines,width=576,opts={}){
 function bahtR(n){return "฿"+(+n||0).toFixed(2);}
 function stripEmoji(s){return String(s||"").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}️⃣]/gu,"").replace(/\s+/g," ").trim();}
 // สร้างไบต์ QR เนทีฟ (GS ( k) จัดกึ่งกลาง — เอาไว้ต่อท้าย raster ใบเสร็จ (เครื่องพิมพ์เรนเดอร์ QR เอง คมชัด)
+// base64 -> ไบต์ · ทางบลูทูธรับ Uint8Array ไม่ใช่ base64 (btPrint หั่นทีละ 512 ไบต์)
+const b64Bytes=(b)=>{const bin=atob(b);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;};
 function escposQRBytes(payload){
   const data=new TextEncoder().encode(payload);const out=[];
   out.push(0x0a,0x1b,0x61,0x01);                              // บรรทัดใหม่ + จัดกึ่งกลาง
@@ -19213,7 +19246,7 @@ async function printTableQR(table,branch,printers=[]){
   const btP=(prs||[]).find(p=>p&&p.active!==false&&(p.branch_id==null||+p.branch_id===+branch.id)&&getPConn(p).type==="bluetooth");
   if(btP){
     try{
-      await btPrint(buildTableQRESC(table,branch,url),getPConn(btP).btName);
+      await btPrint(b64Bytes(await buildTableQRB64(table,branch,url)),getPConn(btP).btName);
       return;
     }catch(e){
       console.error("BT QR print failed — falling back to print window",e);
@@ -19225,7 +19258,10 @@ async function printTableQR(table,branch,printers=[]){
   if(rcps.length){
     try{
       const at=Date.now();
-      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"qr",{at,url,table:table.table_number,branch:branch.name||"",label:table.label||""})})));
+      // ส่งเป็นคำสั่ง "รูปภาพ" (pj) ที่ตัวพิมพ์รองรับอยู่แล้ว — ไม่ต้องแก้ฝั่งตัวพิมพ์
+      // (คำสั่ง "qr" แบบข้อความยังอยู่ในตัวพิมพ์ เผื่อแท็บเก่าที่ยังไม่รีเฟรช)
+      const b64=await buildTableQRB64(table,branch,url);
+      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64})})));
       posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปเครื่องพิมพ์ใบเสร็จแล้ว — กระดาษจะออกใน ~5 วินาที","ok");
       return;
     }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return;}

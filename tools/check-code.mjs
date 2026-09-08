@@ -23,6 +23,30 @@ const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", im
 // ── ดึง printerHandles ตัวจริงจาก print-agent.js มารัน ────────────────────
 // นี่คือกติกาที่ตัดสินว่าใบไหนออกเครื่องไหน ผิดแล้วครัวได้ใบผิด/ไม่ได้ใบ
 // ตั้งแต่เลิกใช้ catch-all (categories:null) ยิ่งต้องพิสูจน์ว่ากติกายังตรง
+// ── ประกอบสตรีม ESC/POS ของใบ QR: ดึงนิพจน์จริงมารัน ────────────────────
+// ใบ QR ประกอบจาก 3 ชิ้น (หัวเป็นรูป → QR เนทีฟ → ท้ายเป็นรูป) ถ้า init/ตัดกระดาษ
+// ไม่ตรงจังหวะ กระดาษจะตัดกลางใบหรือใบถัดไปเพี้ยน — ต้องพิสูจน์ ไม่ใช่ค้นข้อความ
+const escHead = (() => {
+  const ln = APP.split("\n").find(l => l.includes("const head=[...(opts&&opts.noInit?[]"));
+  if (!ln) throw new Error("ไม่เจอบรรทัดประกอบหัวสตรีม");
+  return new Function("opts", "bpr", "h", ln.trim() + " return head;");
+})();
+const escTail = (() => {
+  const ln = APP.split("\n").find(l => l.includes("const tail=opts&&opts.noCut?[]"));
+  if (!ln) throw new Error("ไม่เจอบรรทัดประกอบท้ายสตรีม");
+  return new Function("opts", ln.trim() + " return tail;");
+})();
+const qrBytesOf = (() => {
+  const st = APP.indexOf("function escposQRBytes(payload){");
+  if (st < 0) throw new Error("ไม่เจอ escposQRBytes");
+  let d = 0, started = false, en = -1;
+  for (let i = st; i < APP.length; i++) {
+    if (APP[i] === "{") { d++; started = true; }
+    else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+  }
+  return new Function(APP.slice(st, en) + " return escposQRBytes;")();
+})();
+
 const handlesOf = (() => {
   const st = AGENT.indexOf("function printerHandles(p, it) {");
   if (st < 0) throw new Error("ไม่เจอ printerHandles");
@@ -252,6 +276,21 @@ const guards = [
   // ── ปุ่มส่งรายการต้องอยู่กับที่ ──
   ["จอสั่งอาหารใช้โมดัลแบบไม่เลื่อนทั้งก้อน", APP.includes("onDone={loadAll}") && APP.includes("loadAll();}} wide noScroll>")],
   ["แผงสั่งอาหารไม่ยืนกรานความสูง 75vh แล้ว", !APP.includes('minHeight:isMobile?"calc(100vh - 60px)":"75vh"')],
+  // ── ใบ QR โต๊ะ: ภาษาไทยต้องออกเป็นรูป ไม่ใช่ข้อความ ──
+  ["ชิ้นแรกสั่ง init (0x1b,0x40)", escHead({}, 8, 8).slice(0, 2).join(",") === "27,64"],
+  ["ชิ้นถัดมาไม่ init ซ้ำ", escHead({ noInit: true }, 8, 8).slice(0, 2).join(",") === "27,97"],
+  ["ชิ้นที่ยังไม่จบไม่ตัดกระดาษ", escTail({ noCut: true }).length === 0],
+  ["ชิ้นสุดท้ายตัดกระดาษ (GS V A)", escTail({}).join(",").includes("29,86,65")],
+  ["QR เนทีฟฝังลิงก์ที่ส่งไปจริง", (() => {
+    const url = "https://foodcost-eta.vercel.app/?scan=1&branch=8&table=1";
+    const b = qrBytesOf(url);
+    const txt = b.map(x => String.fromCharCode(x)).join("");
+    return txt.includes(url) && b.join(",").includes("29,40,107");
+  })()],
+  ["ใบ QR สร้างเป็นรูปแล้ว (ไทยไม่เพี้ยน)", APP.includes("async function buildTableQRB64(table,branch,url)")],
+  ["ทาง LAN ส่งใบ QR เป็นคำสั่งรูป (pj) ไม่ใช่ข้อความ",
+    APP.includes('cmdDesc(p,"pj",{at,b64})') && !APP.includes('cmdDesc(p,"qr",{at,url')],
+  ["ทางบลูทูธส่งเป็นไบต์ ไม่ใช่ base64", APP.includes("btPrint(b64Bytes(await buildTableQRB64(table,branch,url))")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
