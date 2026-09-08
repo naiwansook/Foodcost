@@ -224,6 +224,8 @@ const guards = [
   ["ตัวพิมพ์: พิมพ์ไม่ผ่าน = ไม่มาร์คว่าพิมพ์แล้ว", AGENT.includes("if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; }")],
   // ห้ามตัดสินจากอายุ onAt — ตัวพิมพ์เขียนเฉพาะตอนสถานะเปลี่ยน ค่าเก่าไม่ได้แปลว่าตาย
   ["ป้ายสถานะดูสัญญาณชีพตัวพิมพ์ ไม่ใช่อายุค่าเดิม", APP.includes("const agentOk=h.state===") && !APP.includes("const fresh=age<3*60*1000;")],
+  // เจ้าของสั่ง: ให้มีแค่เขียว/แดง ไม่มีสีที่สาม
+  ["สถานะเครื่องพิมพ์มีแค่ออนไลน์/ออฟไลน์", !APP.includes("ไม่ได้รายงาน (ตัวพิมพ์อาจหยุด)") && !APP.includes("[p.id]:!agentOk") && APP.includes("const stView=(st)=>st===")],
   ["ช่องตัวเลขไม่มี type=number ดิบ (iOS)", (APP.match(/<input[^>]*type="number"/g) || []).length === 0],
   // หน้าลูกค้าเปิดสาธารณะ (แค่สแกน QR ก็เข้าได้) — สูตรอาหารต้องไม่หลุดไปกับ JSON
   ["หน้าลูกค้าไม่ส่ง ingredients/sop ออกไป", (() => {

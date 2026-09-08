@@ -21231,7 +21231,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       // ตัวพิมพ์ยังหายใจ = เชื่อค่า on ตามที่มันรายงาน · ไม่หายใจ = ไม่รู้สถานะจริง
       const h=agentHealth(printers,currentBranch?.id);
       const agentOk=h.state==="ok";
-      setStatus(s=>({...s,[p.id]:!agentOk?"stale":(d.on===1?"online":"offline")}));return;
+      setStatus(s=>({...s,[p.id]:(agentOk&&d.on===1)?"online":"offline"}));return;
     }
     setStatus(s=>({...s,[p.id]:"testing"}));
     const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),6000);
@@ -21313,14 +21313,13 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     }catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}
     setSaving(false);
   }
-  // จุดสถานะ 2 สีเท่านั้น: เขียว = ออนไลน์ · แดง = ออฟไลน์ (ทุกสถานะที่ไม่ใช่ออนไลน์)
-  const stView=(st)=>{
-    if(st==="online")return{c:C.green,bg:C.greenLight,t:"🟢 ออนไลน์"};
-    // ตัวพิมพ์เคยรายงานว่าออนไลน์ แต่ค่านั้นเก่าเกิน 3 นาที = ตัวพิมพ์น่าจะหยุดทำงาน
-    // ต้องแยกจาก "ออฟไลน์" ให้ชัด เพราะวิธีแก้คนละอย่าง (เปิดตัวพิมพ์ vs เช็คเครื่องพิมพ์)
-    if(st==="stale")return{c:"#B45309",bg:"#FEF3C7",t:"🟠 ไม่ได้รายงาน (ตัวพิมพ์อาจหยุด)"};
-    return{c:C.red,bg:C.redLight,t:"🔴 ออฟไลน์"};
-  };
+  // จุดสถานะมีสองสีเท่านั้น: เขียว = ออนไลน์ · แดง = ออฟไลน์
+  // ทุกกรณีที่ "ตอนนี้พิมพ์ไม่ได้" นับเป็นออฟไลน์หมด ไม่ว่าจะเพราะเครื่องพิมพ์ปิด
+  // หรือตัวพิมพ์หยุดทำงาน — สำหรับพนักงานผลลัพธ์เหมือนกันคือต้องไปดูที่หน้างาน
+  // มีสีที่สามไว้มีแต่ทำให้ลังเลว่าต้องทำอะไร
+  const stView=(st)=>st==="online"
+    ?{c:C.green,bg:C.greenLight,t:"🟢 ออนไลน์"}
+    :{c:C.red,bg:C.redLight,t:"🔴 ออฟไลน์"};
   const activePrinters=printers.filter(p=>p.active!==false);
   const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};
   const notAdded=printers.filter(p=>p.active===false);
