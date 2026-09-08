@@ -86,6 +86,43 @@ function pickManifest(search) {
   return { href, title };
 }
 
+// ── ดึงตัวสร้าง QR พร้อมเพย์ตัวจริงมารัน แล้วถอด TLV ออกมาตรวจทีละช่อง ────
+// นี่คือกระดาษที่ลูกค้าเอาไปสแกนจ่ายเงินจริง ผิดแล้วเงินไม่เข้า/เข้าไม่ครบ
+// และไม่มีใครรู้จนกว่าจะกระทบยอดสิ้นวัน — ค้นข้อความไม่พอ ต้องถอดรหัสออกมาดู
+const ppGen = (() => {
+  const st = APP.indexOf("function genPromptPayPayload(id,amount){");
+  if (st < 0) throw new Error("ไม่เจอ genPromptPayPayload");
+  let d = 0, started = false, en = -1;
+  for (let i = st; i < APP.length; i++) {
+    if (APP[i] === "{") { d++; started = true; }
+    else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+  }
+  return new Function(APP.slice(st, en) + " return genPromptPayPayload;")();
+})();
+// EMVCo TLV: [tag 2 หลัก][ความยาว 2 หลัก][ค่า] ต่อกันไปเรื่อยๆ
+const tlvParse = (str) => {
+  const o = {};
+  let i = 0;
+  while (i + 4 <= str.length) {
+    const t = str.slice(i, i + 2), n = +str.slice(i + 2, i + 4);
+    if (!Number.isFinite(n) || i + 4 + n > str.length) return null;   // ความยาวเพี้ยน = payload พัง
+    o[t] = str.slice(i + 4, i + 4 + n);
+    i += 4 + n;
+  }
+  return i === str.length ? o : null;
+};
+const crcOK = (p) => {
+  if (p.length < 8 || p.slice(-8, -4) !== "6304") return false;
+  let crc = 0xFFFF;
+  const body = p.slice(0, -4);
+  for (let i = 0; i < body.length; i++) {
+    crc ^= body.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0") === p.slice(-4);
+};
+const pp = (id, amt) => { const p = ppGen(id, amt); return { p, t: p ? tlvParse(p) : null }; };
+
 // ── ดึงตัวเทียบลำดับไทยตัวจริงมารัน ─────────────────────────────────────
 // ค้นข้อความอย่างเดียวไม่พอ: เขียน .sort(thCmp) ไว้แต่ Collator ตั้ง locale ผิด
 // ก็ยังผ่านด่านแบบค้นข้อความ ทั้งที่ลำดับบนจอผิดเหมือนเดิม ต้องเรียงจริงแล้วดูผล
@@ -365,8 +402,6 @@ const guards = [
     APP.includes("service_charge_enabled") && APP.includes("service_charge_rate")],
   ["แนบรูป QR เองได้ (เก็บเป็น Drive ref ไม่ใช่ base64)",
     APP.includes("set('promptpay_qr_image',v)") && APP.includes("<ImgUp label=\"\" value={settings.promptpay_qr_image")],
-  ["ใบเสร็จใช้รูปที่แนบก่อน ถ้าไม่มีค่อยสร้างจากเบอร์",
-    APP.includes("if(posSettings.promptpay_qr_image){") && APP.includes("}else if(posSettings.promptpay_id){")],
   ["QR แบบรูปต้องพิมพ์ยอดกำกับ (รูปไม่มียอดฝัง)",
     APP.includes('lines.push({t:"ยอดที่ต้องชำระ ฿"+(+order.total||0).toFixed(2)')],
   ["ปุ่มในป็อปอัพชำระเงินเป็นพิมพ์ QR จ่ายเงิน", APP.includes("onClick={onPrintQR}") && APP.includes("พิมพ์ QR จ่ายเงิน")],
@@ -437,6 +472,47 @@ const guards = [
     !APP.includes("menus.sort(") && !APP.includes("(menus||[]).sort(")],
   // สร้าง Collator ใหม่ทุกครั้งที่เทียบ = ช้ามากเมื่อรายการยาว
   ["สร้าง Collator ไว้ตัวเดียวใช้ซ้ำ", APP.split("new Intl.Collator").length - 1 === 1],
+  // ── QR ท้ายใบเสร็จต้องล็อกยอด (เจ้าของสั่ง: กันพนักงานทุจริต/ลูกค้ากรอกยอดผิด) ──
+  ["QR ฝังยอดจริงในช่อง 54 ตรงเป๊ะ", pp("0812345678", 2085).t?.["54"] === "2085.00"],
+  ["ยอดมีทศนิยม 2 ตำแหน่งเสมอ", pp("0812345678", 2085.5).t?.["54"] === "2085.50" && pp("0812345678", 7).t?.["54"] === "7.00"],
+  // tag 01 = 12 คือ "dynamic" บอกแอปธนาคารว่า QR ใบนี้มียอดกำหนดมาแล้ว
+  ["มียอด → ประกาศเป็น QR แบบกำหนดยอด (tag 01 = 12)", pp("0812345678", 2085).t?.["01"] === "12"],
+  ["ไม่มียอด → เป็น QR เปล่า (tag 01 = 11) และไม่มีช่อง 54", (() => {
+    const r = pp("0812345678", 0);
+    return r.t?.["01"] === "11" && r.t?.["54"] === undefined;
+  })()],
+  ["สกุลเงินบาทและประเทศไทยถูกต้อง", pp("0812345678", 100).t?.["53"] === "764" && pp("0812345678", 100).t?.["58"] === "TH"],
+  // CRC เพี้ยนแค่หลักเดียว = แอปธนาคารปฏิเสธทั้งใบ ลูกค้าสแกนไม่ติดหน้าเคาน์เตอร์
+  ["CRC ท้าย payload ถูกต้อง", crcOK(pp("0812345678", 2085).p) && crcOK(pp("1234567890123", 99.99).p)],
+  ["โครงสร้าง TLV ถอดกลับได้ครบไม่มีเศษเหลือ", pp("0812345678", 2085).t !== null],
+  // เบอร์มือถือต้องแปลงเป็นรูปแบบสากล 0066 + เบอร์ตัดศูนย์ = 13 หลัก
+  ["เบอร์มือถือแปลงเป็น 0066 ครบ 13 หลัก",
+    pp("0812345678", 100).t?.["29"] === "0016A00000067701011101130066812345678"],
+  ["กรอกมาแบบ +66 ได้ QR เดียวกับกรอก 0 นำหน้า",
+    ppGen("66812345678", 2085) === ppGen("0812345678", 2085)],
+  ["ขีด/เว้นวรรคในเบอร์ไม่ทำให้เพี้ยน",
+    ppGen("081-234-5678", 2085) === ppGen("0812345678", 2085) && ppGen("081 234 5678", 2085) === ppGen("0812345678", 2085)],
+  ["เลขบัตรประชาชน 13 หลักใช้ช่อง 02",
+    pp("1234567890123", 100).t?.["29"] === "0016A00000067701011102131234567890123"],
+  ["e-Wallet 15 หลักใช้ช่อง 03",
+    pp("123456789012345", 100).t?.["29"] === "0016A0000006770101110315123456789012345"],
+  // ความยาวอื่นเคยถูกยัดลงช่องเบอร์โทรดื้อๆ ได้ QR ที่สแกนติดแต่ไม่ตรงบัญชีใคร
+  // กระดาษออกปกติทุกอย่าง เงินไม่เข้า ไม่มีใครรู้จนกว่าจะกระทบยอด
+  ["ความยาวมั่วต้องปฏิเสธ ไม่ใช่สร้าง QR ให้",
+    ["081234567", "08123456789", "081234567890", "12345678901234", "1234567890123456", "abcdefghij", ""]
+      .every(x => ppGen(x, 100) === "")],
+  ["เบอร์ 10 หลักที่ไม่ขึ้นต้นด้วย 0 ก็ต้องปฏิเสธ", ppGen("8123456789", 100) === ""],
+  // ── ลำดับ: QR ล็อกยอดต้องมาก่อนรูปที่แนบ ไม่งั้นล็อกยอดไม่มีผล ──
+  // รูปที่แนบจากแอปธนาคารเป็น QR บัญชีเปล่า ไม่มียอด — ถ้ามันชนะ ลูกค้ากรอกยอดเองเหมือนเดิม
+  ["ใบเสร็จฝั่งตัวพิมพ์: เบอร์ชนะรูป",
+    APP.includes("const payload=posSettings.promptpay_id?genPromptPayPayload(posSettings.promptpay_id,order.total):\"\";")
+    && APP.includes("}else if(posSettings.promptpay_qr_image){")],
+  ["ใบเสร็จฝั่งเบราว์เซอร์: เบอร์ชนะรูป",
+    APP.includes("const ppPayload=ppShow&&posSettings.promptpay_id?genPromptPayPayload(posSettings.promptpay_id,order.total):\"\";")
+    && APP.includes("}else if(ppShow&&posSettings.promptpay_qr_image){")],
+  // ยอด 0 จะได้ QR แบบไม่ล็อกยอด (tag 01 = 11) ซึ่งลูกค้ากรอกเองได้ตามใจ — ไม่พิมพ์เลยดีกว่า
+  ["บิลยอด 0 ไม่พิมพ์ QR ออกมา", APP.split("posSettings.show_qr_promptpay&&(+order.total||0)>0").length - 1 === 1
+    && APP.includes("posSettings.show_qr_promptpay&&!paid&&(+order.total||0)>0")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

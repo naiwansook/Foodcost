@@ -17279,16 +17279,17 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const vatLine=order.vat>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>VAT ${esc(order.vat_rate||7)}%${order.vat_included?" (รวมในราคา)":""}</span><span>${order.vat_included?"":"+"}฿${(+order.vat).toFixed(2)}</span></div>`:"";
   // PromptPay QR (lazy load via google chart API)
   let qrBlock="";
-  if(posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_qr_image&&!paid){
+  // ลำดับเดียวกับใบเสร็จฝั่งตัวพิมพ์เป๊ะๆ — สองเส้นทางนี้ต้องได้กระดาษเหมือนกัน
+  // เบอร์มาก่อน (ยอดล็อกใน QR) · รูปที่แนบเป็นตัวสำรองเมื่อยังไม่ได้กรอกเบอร์
+  const ppShow=!!(posSettings&&posSettings.show_qr_promptpay&&!paid&&(+order.total||0)>0);
+  const ppPayload=ppShow&&posSettings.promptpay_id?genPromptPayPayload(posSettings.promptpay_id,order.total):"";
+  if(ppPayload){
+    const qrSrc=`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(ppPayload)}`;
+    qrBlock=`<div class="line"></div><div style="text-align:center"><div style="font-size:13px;font-weight:700;margin-bottom:2px">📱 สแกนพร้อมเพย์เพื่อชำระ</div><div style="font-size:14px;font-weight:800">ยอดที่ต้องชำระ ฿${(+order.total).toFixed(2)}</div><div style="font-size:10px;color:#888;margin-bottom:4px">(ยอดล็อกอยู่ในคิวอาร์แล้ว)</div><img src="${qrSrc}" style="width:160px;height:160px;margin:4px 0"/><div style="font-size:11px;color:#555">${esc(posSettings.promptpay_name||"")}</div><div style="font-size:10px;color:#888">${esc(posSettings.promptpay_id)}</div></div>`;
+  }else if(ppShow&&posSettings.promptpay_qr_image){
     // รูปที่ร้านแนบเอง — ต้องใช้ URL แบบเต็ม เพราะหน้าต่างพิมพ์เป็น about:blank
     // แปล path สัมพัทธ์ /api/drive-view ไม่ได้ รูปจะไม่ขึ้นแล้วลูกค้าไม่มีอะไรให้สแกน
     qrBlock=`<div class="line"></div><div style="text-align:center"><div style="font-size:13px;font-weight:700;margin-bottom:2px">สแกนจ่ายเงิน</div><div style="font-size:14px;font-weight:800;margin-bottom:6px">ยอดที่ต้องชำระ ฿${(+order.total||0).toFixed(2)}</div><img src="${esc(driveImgAbs(posSettings.promptpay_qr_image))}" style="width:190px;height:auto"/>${posSettings.promptpay_name?`<div style="font-size:12px;margin-top:4px">${esc(posSettings.promptpay_name)}</div>`:""}</div>`;
-  }else if(posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_id&&!paid){
-    const payload=genPromptPayPayload(posSettings.promptpay_id,order.total||0);
-    if(payload){
-      const qrSrc=`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(payload)}`;
-      qrBlock=`<div class="line"></div><div style="text-align:center"><div style="font-size:13px;font-weight:700;margin-bottom:4px">📱 สแกนพร้อมเพย์เพื่อชำระ</div><img src="${qrSrc}" style="width:160px;height:160px;margin:4px 0"/><div style="font-size:11px;color:#555">${esc(posSettings.promptpay_name||"")}</div><div style="font-size:10px;color:#888">${esc(posSettings.promptpay_id)}</div></div>`;
-    }
   }
   const headerExtra=posSettings?.receipt_header?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin:4px 0">${esc(posSettings.receipt_header)}</div>`:"";
   const footerExtra=posSettings?.receipt_footer?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin-top:6px">${esc(posSettings.receipt_footer)}</div>`:"";
@@ -17528,9 +17529,21 @@ async function buildReceiptB64(order,tableNum,branchName,posSettings,paid){
   const lines=buildReceiptLines(order,tableNum,branchName,posSettings,paid);
   let qrBytes=null;
   // QR พร้อมเพย์ โชว์ตอน "ยังไม่ชำระ" เพื่อให้ลูกค้าสแกนจ่าย (จ่ายแล้วไม่ต้องโชว์)
-  if(!paid&&posSettings&&posSettings.show_qr_promptpay){
-    if(posSettings.promptpay_qr_image){
-      // รูป QR ที่ร้านแนบเอง (บันทึกจากแอปธนาคาร) มาก่อน — เป็นบัญชีที่ร้านยืนยันเองแล้ว
+  // ยอดต้อง > 0 — ยอด 0 จะได้ QR แบบไม่ล็อกยอด ซึ่งลูกค้ากรอกเองได้ตามใจ ไม่ต้องพิมพ์เลยดีกว่า
+  if(!paid&&posSettings&&posSettings.show_qr_promptpay&&(+order.total||0)>0){
+    // สร้างจากเบอร์ก่อนเสมอ เพราะยอดจะฝังอยู่ใน QR (tag 54) ลูกค้าสแกนแล้วยอดขึ้นเอง
+    // กรอกยอดผิดไม่ได้ และพนักงานสั่งให้โอนน้อยกว่าจริงไม่ได้ด้วย
+    // รูปที่แนบเป็น QR บัญชีเปล่าๆ ไม่มียอด — เก็บไว้เป็นตัวสำรองเมื่อยังไม่ได้กรอกเบอร์
+    const payload=posSettings.promptpay_id?genPromptPayPayload(posSettings.promptpay_id,order.total):"";
+    if(payload){
+      lines.push({rule:true});
+      lines.push({t:"สแกนพร้อมเพย์เพื่อชำระ",size:22,bold:true,align:"center"});
+      lines.push({t:"ยอดที่ต้องชำระ ฿"+(+order.total).toFixed(2),size:21,bold:true,align:"center",mb:2});
+      lines.push({t:"(ยอดล็อกอยู่ในคิวอาร์แล้ว)",size:15,align:"center",mb:4});
+      if(posSettings.promptpay_name)lines.push({t:stripEmoji(posSettings.promptpay_name),size:18,align:"center"});
+      lines.push({t:String(posSettings.promptpay_id),size:16,align:"center"});
+      qrBytes=escposQRBytes(payload);
+    }else if(posSettings.promptpay_qr_image){
       // ⚠️ QR แบบรูปไม่มียอดฝังอยู่ ลูกค้าต้องพิมพ์ยอดเอง จึงต้องพิมพ์ยอดตัวโตกำกับไว้
       // ไม่งั้นลูกค้าเดายอดเอง แล้วร้านได้เงินไม่ตรง
       lines.push({rule:true});
@@ -17538,16 +17551,6 @@ async function buildReceiptB64(order,tableNum,branchName,posSettings,paid){
       lines.push({t:"ยอดที่ต้องชำระ ฿"+(+order.total||0).toFixed(2),size:21,bold:true,align:"center",mb:8});
       lines.push({img:driveImgSrc(posSettings.promptpay_qr_image),h:320,mb:6});
       if(posSettings.promptpay_name)lines.push({t:stripEmoji(posSettings.promptpay_name),size:18,align:"center"});
-    }else if(posSettings.promptpay_id){
-      // ไม่มีรูปแนบ → สร้าง QR พร้อมเพย์เอง (แบบนี้ยอดฝังอยู่ใน QR ลูกค้าไม่ต้องพิมพ์)
-      const payload=genPromptPayPayload(posSettings.promptpay_id,order.total||0);
-      if(payload){
-        lines.push({rule:true});
-        lines.push({t:"สแกนพร้อมเพย์เพื่อชำระ",size:22,bold:true,align:"center"});
-        if(posSettings.promptpay_name)lines.push({t:stripEmoji(posSettings.promptpay_name),size:18,align:"center"});
-        lines.push({t:String(posSettings.promptpay_id),size:16,align:"center"});
-        qrBytes=escposQRBytes(payload);
-      }
     }
   }
   return await escposSlipRaster(lines,576,qrBytes?{appendBytes:qrBytes}:{});
@@ -19880,12 +19883,15 @@ function genPromptPayPayload(id,amount){
   if(!id)return"";
   // Sanitize: keep digits only
   const num=String(id).replace(/\D/g,"");
-  if(num.length<10)return"";
-  let target=num;
-  if(num.length===10)target="0066"+num.slice(1);     // 10-digit phone
-  else if(num.length===13)target=num;                  // 13-digit citizen ID
-  else target=num;
-  const tagPP="0016A000000677010111"+(num.length===13?"02"+String(target.length).padStart(2,'0')+target:"01"+String(target.length).padStart(2,'0')+target);
+  // พร้อมเพย์มีสามแบบเท่านั้น ความยาวอื่นคือกรอกผิด — ต้องปฏิเสธ ไม่ใช่สร้าง QR มั่วๆ ให้
+  // sub-tag: 01=เบอร์มือถือ · 02=เลขบัตรประชาชน/ผู้เสียภาษี · 03=e-Wallet
+  let target="",sub="01";
+  if(num.length===10&&num[0]==="0")target="0066"+num.slice(1);           // 08x-xxx-xxxx
+  else if(num.length===11&&num.slice(0,2)==="66")target="0066"+num.slice(2); // กรอกมาแบบ +66
+  else if(num.length===13){target=num;sub="02";}                          // เลขบัตรประชาชน
+  else if(num.length===15){target=num;sub="03";}                          // e-Wallet
+  else return"";
+  const tagPP="0016A000000677010111"+sub+String(target.length).padStart(2,'0')+target;
   // Build TLV
   function tlv(tag,val){return tag+String(val.length).padStart(2,'0')+val;}
   let p="";
@@ -19972,7 +19978,7 @@ function POSSettingsFields({s:settings,set}){
       {settings.show_qr_promptpay&&<div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:8}}>
           <div>
-            <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>เบอร์โทร / เลขบัตร ปชช</div>
+            <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>เบอร์โทร / เลขบัตร ปชช <span style={{fontWeight:600,color:C.ink4}}>(กรอกแล้วยอดจะล็อกใน QR)</span></div>
             <input value={settings.promptpay_id||""} onChange={e=>set('promptpay_id',e.target.value)} placeholder="0812345678 หรือ 1234567890123" style={{...iS,fontSize:14,fontFamily:"monospace",letterSpacing:.5}}/>
           </div>
           <div>
@@ -19983,20 +19989,21 @@ function POSSettingsFields({s:settings,set}){
         <div style={{background:C.bg,borderRadius:10,padding:12,marginBottom:8}}>
           <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หรือแนบรูป QR ของร้านเอง</div>
           <div style={{fontSize:11.5,color:C.ink4,marginBottom:10,fontFamily:"'Sarabun',sans-serif",lineHeight:1.65}}>
-            บันทึกรูป QR จากแอปธนาคารมาแนบได้เลย · ถ้าแนบรูปไว้ ใบเสร็จจะใช้รูปนี้แทนการสร้าง QR จากเบอร์<br/>
-            <b style={{color:C.ink3}}>ข้อแตกต่าง:</b> QR ที่สร้างจากเบอร์จะมียอดเงินฝังอยู่ ลูกค้าสแกนแล้วจ่ายได้เลย · ส่วนรูปที่แนบเองไม่มียอดฝัง ลูกค้าต้องพิมพ์ยอดเอง (ใบเสร็จจะพิมพ์ยอดตัวโตกำกับไว้ให้)
+            ใช้เมื่อ<b>ยังไม่ได้กรอกเบอร์พร้อมเพย์</b>ด้านบน · ถ้ากรอกเบอร์ไว้ ใบเสร็จจะใช้ QR ที่สร้างจากเบอร์เสมอ รูปนี้จะเป็นตัวสำรอง<br/>
+            <b style={{color:C.ink3}}>ข้อแตกต่าง:</b> QR จากเบอร์ = <b>ยอดล็อกอยู่ในคิวอาร์</b> ลูกค้าสแกนแล้วยอดขึ้นเอง กรอกผิดไม่ได้ · รูปที่แนบเอง = ไม่มียอด ลูกค้าพิมพ์ยอดเอง (ใบเสร็จจะพิมพ์ยอดตัวโตกำกับไว้ให้)
           </div>
           <ImgUp label="" value={settings.promptpay_qr_image||null} onChange={v=>set('promptpay_qr_image',v)} compact/>
         </div>
-        {!settings.promptpay_qr_image&&qrPreview&&<div style={{background:C.bg,borderRadius:10,padding:12,display:"flex",alignItems:"center",gap:14}}>
+        {qrPreview&&<div style={{background:C.bg,borderRadius:10,padding:12,display:"flex",alignItems:"center",gap:14}}>
           <QRImg url={qrPreview} size={100}/>
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
-            <div style={{fontWeight:700,color:C.green,marginBottom:3}}>✅ QR ใช้งานได้</div>
+            <div style={{fontWeight:700,color:C.green,marginBottom:3}}>✅ QR ใช้งานได้ · ยอดล็อก</div>
             <div>QR ตัวอย่าง (จำลองยอด ฿100)</div>
             <div style={{fontSize:11,marginTop:3,color:C.ink4}}>QR จริงในใบเสร็จจะถูกสร้างตามยอดบิลแต่ละครั้ง</div>
+            {settings.promptpay_qr_image&&<div style={{fontSize:11,marginTop:4,color:C.green,fontWeight:700}}>ใบเสร็จจะใช้ QR นี้ — รูปที่แนบไว้เป็นตัวสำรอง</div>}
           </div>
         </div>}
-        {!qrPreview&&settings.promptpay_id&&<div style={{background:C.redLight,borderRadius:10,padding:10,fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>⚠️ เบอร์/เลขบัตรไม่ถูกต้อง (ต้อง 10 หรือ 13 หลัก)</div>}
+        {!qrPreview&&settings.promptpay_id&&<div style={{background:C.redLight,borderRadius:10,padding:10,fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>⚠️ เบอร์/เลขบัตรไม่ถูกต้อง — ต้องเป็นเบอร์มือถือ 10 หลัก, เลขบัตรประชาชน 13 หลัก หรือ e-Wallet 15 หลัก{settings.promptpay_qr_image?" · ตอนนี้ใบเสร็จจะใช้รูปที่แนบไว้แทน (ไม่ล็อกยอด)":" · ตอนนี้ใบเสร็จจะไม่มี QR ให้สแกน"}</div>}
       </div>}
     </Card>
 
@@ -20035,7 +20042,6 @@ function POSSettingsPanel({currentBranch}){
   }
   if(loading||!settings)return <Loading text="โหลดการตั้งค่า..."/>;
   function set(k,v){setSettings(s=>({...s,[k]:v}));}
-  const qrPreview=settings.show_qr_promptpay&&settings.promptpay_id?genPromptPayPayload(settings.promptpay_id,100):"";
   return <div style={{maxWidth:780}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
       <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0}}>⚙️ ตั้งค่า POS — {currentBranch.name}</h3>
