@@ -1405,6 +1405,12 @@ const hasRecipe=(m)=>!!m&&Array.isArray(m.ingredients)&&m.ingredients.length>0;
 // ตอนนี้ทุกที่อ่าน menus.category อย่างเดียว · คอลัมน์ local_categories ยังคงอยู่ในฐานข้อมูล
 // ไม่ได้ลบทิ้ง เผื่อต้องย้อนกลับ แต่ไม่มีโค้ดไหนอ่านมันแล้ว
 const menuCatOf=(m)=>{const c=String((m&&m.category)||"").trim();return c||null;};
+// เรียงข้อความไทยแบบพจนานุกรม — สระหน้า (เ แ โ ใ ไ) ต้องไปนับที่พยัญชนะตัวถัดไป
+// เช่น "ไก่ทอด" อยู่หมวด ก และ "เคลียมัทฉะ" อยู่หมวด ค ไม่ใช่ไปกองท้ายตาราง
+// แบบที่ .sort() เปล่าๆ ให้ (มันเรียงตามรหัสตัวอักษร สระหน้ามีรหัสสูงกว่าพยัญชนะทุกตัว)
+// สร้าง Collator ไว้ตัวเดียวใช้ซ้ำ — สร้างใหม่ทุกครั้งที่เทียบจะช้ามากเมื่อรายการยาว
+const _thColl=new Intl.Collator("th",{numeric:true});
+const thCmp=(a,b)=>_thColl.compare(String(a==null?"":a),String(b==null?"":b));
 // แบ่งยอดเท่ากัน n คน — คิดเป็นสตางค์เพื่อให้ "บวกกลับได้เท่าเดิมเป๊ะ"
 // หารไม่ลงตัวเป็นเรื่องปกติ (฿1000 / 3) เศษสตางค์ต้องไปตกอยู่กับใครสักคน
 // ไม่ใช่หายไปเฉยๆ — ร้านจะเก็บเงินขาดทุกบิลที่หารไม่ลง
@@ -21350,8 +21356,10 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // เมนูที่ยังไม่ได้ตั้งหมวดของสาขานี้จะไม่ขึ้นในตัวเลือก และจะพิมพ์ออกเครื่อง "พิมพ์ทุกหมวด" (catch-all)
   const effCat=menuCatOf;
-  const branchCategories=useMemo(()=>{const s=new Set();(menus||[]).forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort();},[menus,currentBranch]);
-  const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c);
+  // เรียงตามพยัญชนะไทยทั้งหัวหมวดและเมนูข้างใน — 26 หมวด/169 เมนู ถ้าไม่เรียงคือไล่หาไม่เจอ
+  const branchCategories=useMemo(()=>{const s=new Set();(menus||[]).forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort(thCmp);},[menus,currentBranch]);
+  // .filter() คืนอาร์เรย์ใหม่อยู่แล้ว .sort() ตรงนี้จึงไม่ไปสลับลำดับ menus ตัวจริง
+  const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c).sort((a,b)=>thCmp(a.name,b.name));
   function openSettings(p){
     setSettingsP(p);setSName(p.name||"");
     // เครื่องเก่าที่เก็บ categories=null คือ "รับทุกหมวด" อยู่เดิม — เปิดมาให้ติ๊กครบทุกหมวด
