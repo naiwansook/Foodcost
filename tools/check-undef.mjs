@@ -114,6 +114,52 @@ for (const file of TARGETS) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// คอมโพเนนต์ที่ "ลืม return" — สร้าง JSX ไว้แต่ไม่ได้คืนค่า
+//
+// เกิดจริง 8 ก.ย. 69: แยกฟอร์มตั้งค่า POS ออกมาเป็นคอมโพเนนต์ แล้ววาง JSX
+// ไว้ในตัวฟังก์ชันเฉยๆ ไม่มี return — React เรียกแล้วได้ undefined จึงไม่วาดอะไร
+// หน้าตั้งค่าทั้งหน้าว่างเปล่าบน production ทั้งที่ด่านตรวจ 130 ข้อผ่านหมด
+// เพราะด่านพวกนั้นค้นแต่ "ข้อความมีอยู่ไหม" ไม่ได้ดูว่าโครงสร้างคืนค่าหรือเปล่า
+//
+// กติกา: ฟังก์ชันชื่อขึ้นต้นตัวใหญ่ (= คอมโพเนนต์) ที่ข้างในมี JSX
+//        ต้องมี return อย่างน้อยหนึ่งจุดในตัวมันเอง
+// ══════════════════════════════════════════════════════════════════════
+for (const file of TARGETS) {
+  let ast;
+  try {
+    ast = parser.parse(fs.readFileSync(file, "utf8"), {
+      sourceType: "module",
+      plugins: ["jsx", "classProperties", "optionalChaining", "nullishCoalescingOperator", "dynamicImport", "topLevelAwait"],
+      errorRecovery: false,
+    });
+  } catch { continue; }
+
+  const bad = [];
+  traverse(ast, {
+    FunctionDeclaration(path) {
+      const name = path.node.id && path.node.id.name;
+      if (!name || !/^[A-Z]/.test(name)) return;   // เอาเฉพาะคอมโพเนนต์
+      let hasJSX = false, hasReturn = false;
+      path.traverse({
+        "JSXElement|JSXFragment"(p) {
+          if (p.getFunctionParent() === path) hasJSX = true;
+        },
+        ReturnStatement(p) {
+          if (p.getFunctionParent() === path) hasReturn = true;
+        },
+      });
+      if (hasJSX && !hasReturn) bad.push([name, path.node.loc && path.node.loc.start.line]);
+    },
+  });
+
+  for (const [name, line] of bad) {
+    console.log(`❌ ${file}: คอมโพเนนต์ ${name}() บรรทัด ${line} สร้าง JSX ไว้แต่ไม่มี return`);
+    console.log("     React จะได้ undefined แล้วไม่วาดอะไรเลย — หน้าจะว่างเปล่าโดยไม่มี error");
+    problems++;
+  }
+}
+
 console.log(problems === 0
   ? `✅ ไม่มีตัวแปรที่ไม่มีอยู่จริง (${TARGETS.join(", ")})`
   : `\n⚠️ พบ ${problems} ชื่อ — ถ้าปล่อยไป React จะโยน ReferenceError แล้วแอปเป็นจอขาว`);
