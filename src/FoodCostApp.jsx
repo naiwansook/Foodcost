@@ -1405,6 +1405,10 @@ const hasRecipe=(m)=>!!m&&Array.isArray(m.ingredients)&&m.ingredients.length>0;
 // ตอนนี้ทุกที่อ่าน menus.category อย่างเดียว · คอลัมน์ local_categories ยังคงอยู่ในฐานข้อมูล
 // ไม่ได้ลบทิ้ง เผื่อต้องย้อนกลับ แต่ไม่มีโค้ดไหนอ่านมันแล้ว
 const menuCatOf=(m)=>{const c=String((m&&m.category)||"").trim();return c||null;};
+// เครื่องพิมพ์ของสาขานี้ = ของสาขาตัวเอง + ที่ตั้งเป็น "ทุกสาขา" (branch_id=null)
+// กติกาเดียวกับที่ print-agent.js ใช้เลือกเครื่องของตัวเอง — ต้องตรงกัน
+// ไม่งั้นในจอเห็นเครื่องของสาขาอื่น แต่กดสั่งพิมพ์แล้วไม่มีตัวไหนรับ
+const printersAt=(list,bid)=>(list||[]).filter(p=>p.branch_id==null||+p.branch_id===+bid);
 // เมนูนี้เปิดให้สาขานี้ขายไหม — ว่าง/ไม่ได้ตั้ง = ทุกสาขา (ค่าเดิมของระบบ)
 // ⚠️ ตัวนี้คือตัวกรองสาขาที่แท้จริง และต้องเรียกใช้ตรง ๆ เสมอ
 // ก่อนหน้านี้หน้าขายกับหน้าลูกค้าไม่ได้เรียกมัน แต่รอด "โดยบังเอิญ" เพราะกรองด้วย
@@ -14502,7 +14506,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                 {[{v:"ip",label:"🌐 IP Network"},{v:"bluetooth",label:"📶 Bluetooth"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer",transition:"all .15s"}}>{o.label}</button>)}
               </div>
             </div>
-                        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(branches||[]).filter(b=>+b.id===+((currentBranch&&currentBranch.id)||0)).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
           </div>
           {/* Row 2: IP fields OR BT scan */}
           {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:14,marginBottom:14,alignItems:"flex-end"}}>
@@ -16818,7 +16822,7 @@ export default function App(){
         api.getAllPrinters(),
       ]);
       setIngs(i);setMenus(m);setAllCats(c);setUsers(u);setBranches(b);setSuppliers(s);
-      setCostHistory(ch);setActionHistory(ah);setOrders(o);setPrinters(pr);
+      setCostHistory(ch);setActionHistory(ah);setOrders(o);setPrinters(printersAt(pr,currentBranch.id));
       try{const as=await api.getAssets();setAssets(as);}catch{}
       if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}
     }catch(e){setInitErr("เชื่อมต่อ Supabase ไม่ได้: "+e.message);}
@@ -16896,7 +16900,7 @@ export default function App(){
     history:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getCostHist(isCentral?null:currentBranch?.id);setCostHistory(d);},
     action:async()=>{const d=await api.getActionHist();setActionHistory(d);},
     orders:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getOrders(isCentral?null:currentBranch?.id);setOrders(d);if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}},
-    printers:async()=>{const d=await api.getAllPrinters();setPrinters(d);},
+    printers:async()=>{const d=await api.getAllPrinters();setPrinters(printersAt(d,currentBranch.id));},
     assets:async()=>{const d=await api.getAssets();setAssets(d);},
   };
   const ings=useMemo(()=>{
@@ -20015,7 +20019,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
       {section==="menu"&&<POSMenuTools currentBranch={currentBranch} variant="cards" onChanged={reloadMenus}/>}
       {section==="sellers"&&<POSSellerPanel currentBranch={currentBranch}/>}
-      {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus}/>}
+      {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus} currentBranch={currentBranch}/>}
       {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
       {section==="promotions"&&<POSPromotionManager currentBranch={currentBranch} menus={menus}/>}
       {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts}/>}
@@ -20425,7 +20429,10 @@ function POSShiftHistory({shifts,loading,reload}){
 }
 
 // Printer panel (extracted from SettingsTab for back-office)
-function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}){
+function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],currentBranch}){
+  // เลือกสาขาได้เฉพาะสาขาที่เปิดอยู่ — รายการด้านล่างกรองตามสาขาแล้ว
+  // ถ้าเลือกสาขาอื่นได้ จะสร้างเสร็จแล้วหายไปจากจอทันที หาไม่เจอว่าไปอยู่ไหน
+  const branchOpts=(branches||[]).filter(b=>+b.id===+((currentBranch&&currentBranch.id)||0));
   const isAdmin=hasPerm(currentUser,"settings");
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
@@ -20584,7 +20591,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
               {[{v:"ip",label:"🌐 IP"},{v:"bluetooth",label:"📶 BT"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{o.label}</button>)}
             </div>
           </div>
-                    <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                    <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{branchOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
         </div>
         {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:12,marginBottom:12,alignItems:"flex-end"}}>
           <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
@@ -21442,7 +21449,7 @@ function POSPinGate({branchId}){
         if(b.type==="central"){setErr("ครัวกลางไม่ได้เปิดขายหน้าร้าน");setLoading(false);return;}
         const settings=ps&&ps[0]?ps[0]:null;
         setBranch(b);setStaff(Array.isArray(settings?.sales_staff)?settings.sales_staff:[]);
-        setMenus(ms||[]);setPrinters(prs||[]);
+        setMenus(ms||[]);setPrinters(printersAt(prs,branchId));
       }catch(e){if(alive)setErr(e&&e.message||String(e));}
       if(alive)setLoading(false);
     })();
@@ -21483,7 +21490,7 @@ function POSPinGate({branchId}){
           {shiftOpen&&<button onClick={()=>setCloseShiftReq(n=>n+1)} title="ปิดกะการขาย & พิมพ์สรุปยอด" style={{background:"linear-gradient(135deg,#EF4444,#DC2626)",border:"none",borderRadius:11,padding:isMobile?"10px 18px":"12px 26px",cursor:"pointer",color:"#fff",fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?14.5:16,fontWeight:900,flexShrink:0,display:"inline-flex",alignItems:"center",gap:7,boxShadow:"0 3px 12px rgba(239,68,68,.4)",whiteSpace:"nowrap"}}>🔚 ปิดกะ</button>}
         </div>
         <div style={{flex:1,padding:isMobile?"14px 12px":"20px 24px",minWidth:0,minHeight:0}}>
-          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(await api.getAllPrinters());}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}} refreshTick={posRefreshTick} closeShiftSignal={closeShiftReq} onShiftState={setShiftOpen}/>
+          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(printersAt(await api.getAllPrinters(),branchId));}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}} refreshTick={posRefreshTick} closeShiftSignal={closeShiftReq} onShiftState={setShiftOpen}/>
         </div>
       </div>
     </>;

@@ -162,6 +162,16 @@ const guards = [
   ["หน้าลูกค้าโหลดครั้งแรกใช้ getMenusPublic", APP.includes("await Promise.all([api.getMenusPublic(),api.getPOSSettings(branchId)])")],
   ["สถานะของหมดยังเช็คทุก 1 นาที", APP.includes("menuPollId=setInterval(()=>{if(!document.hidden)refreshAvail();},60000)")],
   ["ตัวจับเวลาเมนูเต็มถูกเคลียร์ตอนออกจากหน้า", APP.includes("if(fullPollId)clearInterval(fullPollId);")],
+  // เครื่องพิมพ์: จอต้องเห็นเฉพาะของสาขาที่เปิดอยู่ (+ ที่ตั้งเป็นทุกสาขา)
+  // ถ้าหลุดกติกานี้ จะเห็นเครื่องของสาขาอื่น กดสั่งพิมพ์แล้วไม่มีตัวไหนรับ
+  ["มีตัวช่วยกลาง printersAt", APP.includes("const printersAt=(list,bid)=>")],
+  ["กติกาตรงกับ print-agent (null = ทุกสาขา)",
+    APP.includes("p.branch_id==null||+p.branch_id===+bid") && AGENT.includes("p.branch_id == null || +p.branch_id === +BRANCH")],
+  ["โหลดเครื่องพิมพ์ครั้งแรก กรองตามสาขา", APP.includes("setPrinters(printersAt(pr,currentBranch.id))")],
+  ["โหลดซ้ำ กรองตามสาขา", APP.includes("setPrinters(printersAt(d,currentBranch.id))")],
+  ["เส้นทาง POS แยก กรองตามสาขา", APP.includes("setPrinters(printersAt(prs,branchId))")],
+  ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
+    !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
 for (const [label, cond] of guards) ok_(label, cond);
 
