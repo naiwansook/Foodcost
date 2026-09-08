@@ -1,0 +1,36 @@
+{
+  "name": "ขายหน้าร้าน · บางใหญ่",
+  "short_name": "ขายหน้าร้าน",
+  "description": "รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",
+  "lang": "th",
+  "dir": "ltr",
+  "start_url": "/?pos=1&branch=4",
+  "scope": "/",
+  "display": "minimal-ui",
+  "display_override": [
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "theme_color": "#F2EBE3",
+  "background_color": "#FFFBF6",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

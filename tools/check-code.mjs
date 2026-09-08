@@ -170,6 +170,11 @@ const guards = [
   ["โหลดเครื่องพิมพ์ครั้งแรก กรองตามสาขา", APP.includes("setPrinters(printersAt(pr,currentBranch.id))")],
   ["โหลดซ้ำ กรองตามสาขา", APP.includes("setPrinters(printersAt(d,currentBranch.id))")],
   ["เส้นทาง POS แยก กรองตามสาขา", APP.includes("setPrinters(printersAt(prs,branchId))")],
+  // ทางลัดหน้าจอโฮม: iOS อ่าน start_url จาก manifest ไม่ใช่ URL ที่เปิดอยู่
+  ["จอขายสลับ manifest เป็นของสาขาตัวเอง", APP.includes('link.setAttribute("href",`/pos-${+branchId}.webmanifest`)')],
+  ["คืนค่า manifest เดิมตอนออกจากจอขาย", APP.includes('if(link&&prevHref!=null)link.setAttribute("href",prevHref);')],
+  ["มีสคริปต์สร้าง manifest รายสาขา", fs.existsSync(new URL("./make-pos-manifests.mjs", new URL("../scripts/", import.meta.url)))],
+  ["build เรียกสคริปต์สร้าง manifest", JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts.build.includes("make-pos-manifests")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

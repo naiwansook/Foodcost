@@ -21424,6 +21424,26 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
 // straight into the sale screen. PINs are defined per-branch in POS back office
 // (stored in pos_settings.sales_staff). No username/password, no main app.
 function POSPinGate({branchId}){
+  // iOS ตอนกด "เพิ่มไปยังหน้าจอโฮม" ไม่ได้ใช้ URL ที่เปิดอยู่ แต่ไปอ่าน start_url
+  // จาก manifest — ตัวหลักชี้ไปที่ "/" ซึ่งเป็นหน้าเข้าระบบหลังบ้าน พนักงานจึงได้
+  // ทางลัดผิดตัว ต้องสลับไปตัวที่ start_url ชี้มาที่จอขายของสาขานี้ตรงๆ
+  // (ไฟล์สร้างจาก scripts/make-pos-manifests.mjs ตอน build)
+  useEffect(()=>{
+    let undo=null;
+    try{
+      const link=document.querySelector('link[rel="manifest"]');
+      const title=document.querySelector('meta[name="apple-mobile-web-app-title"]');
+      const prevHref=link&&link.getAttribute("href");
+      const prevTitle=title&&title.getAttribute("content");
+      if(link)link.setAttribute("href",`/pos-${+branchId}.webmanifest`);
+      if(title)title.setAttribute("content","ขายหน้าร้าน");
+      undo=()=>{
+        if(link&&prevHref!=null)link.setAttribute("href",prevHref);
+        if(title&&prevTitle!=null)title.setAttribute("content",prevTitle);
+      };
+    }catch{}
+    return()=>{try{if(undo)undo();}catch{}};
+  },[branchId]);
   const[branch,setBranch]=useState(null);
   const[staff,setStaff]=useState([]);
   const[menus,setMenus]=useState([]);
