@@ -1419,6 +1419,18 @@ const splitEvenly=(total,n)=>{
 // กติกาเดียวกับที่ print-agent.js ใช้เลือกเครื่องของตัวเอง — ต้องตรงกัน
 // ไม่งั้นในจอเห็นเครื่องของสาขาอื่น แต่กดสั่งพิมพ์แล้วไม่มีตัวไหนรับ
 const printersAt=(list,bid)=>(list||[]).filter(p=>p.branch_id==null||+p.branch_id===+bid);
+// ใบครัวที่พิมพ์ไม่ออก — ตัวพิมพ์บันทึกไว้ใน description.failed (print-agent.js)
+// คืนเป็น Map: เลขบิล -> {table, names, n, at}
+// ระบบไม่ลองพิมพ์ใหม่เองแล้ว (เจ้าของสั่ง 8 ก.ย. 69) พนักงานต้องเห็นแล้วกดเอง
+// ถ้าไม่เอามาแสดง ใบที่ไม่ออกจะเงียบหายไปเลย ครัวไม่รู้ ลูกค้ารอ
+const printFailsOf=(printers)=>{
+  const m=new Map();
+  for(const p of printers||[]){
+    let d={};try{d=JSON.parse(p.description||"{}");}catch{}
+    for(const f of (Array.isArray(d.failed)?d.failed:[])) if(f&&f.orderId!=null)m.set(String(f.orderId),f);
+  }
+  return m;
+};
 // เมนูนี้เปิดให้สาขานี้ขายไหม — ว่าง/ไม่ได้ตั้ง = ทุกสาขา (ค่าเดิมของระบบ)
 // ⚠️ ตัวนี้คือตัวกรองสาขาที่แท้จริง และต้องเรียกใช้ตรง ๆ เสมอ
 // ก่อนหน้านี้หน้าขายกับหน้าลูกค้าไม่ได้เรียกมัน แต่รอด "โดยบังเอิญ" เพราะกรองด้วย
@@ -17700,7 +17712,8 @@ function tableDims(t){
   if(seats<=6)return{w:110,h:90};
   return{w:130,h:100};
 }
-function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable,onRenameZone,onDeleteZone}){
+function POSTableMap({tables,activeOrders,zones=[],printers=[],onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable,onRenameZone,onDeleteZone}){
+  const failMap=printFailsOf(printers);
   // Free-position floor plan: TAP a table = open its order · LONG-PRESS a table to
   // lift it (shows ✏️/🗑 + drag to reposition). Drag is clamped to the canvas width
   // so the view still scrolls vertically only (no horizontal scroll).
@@ -17853,7 +17866,9 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
             <div style={{fontWeight:900,fontSize:17,color:sv.text,fontFamily:"'Sarabun',sans-serif",lineHeight:1}}>{t.table_number}</div>
             {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1,maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</div>}
             {st==="available"?<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{t.seats||4} ที่นั่ง</div>
-            :<><div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
+            :<>{o&&failMap.has(String(o.id))&&<div title={"ใบครัวไม่ออก: "+(failMap.get(String(o.id)).names||[]).join(", ")}
+                style={{fontSize:10,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif"}}>⚠️ ใบครัวไม่ออก</div>}
+              <div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
             {active&&<>
               <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setTableForm({id:t.id,table_number:t.table_number,label:t.label||"",seats:t.seats||4,shape:t.shape||"square",zone:t.zone||""});}} title="แก้ไขโต๊ะ" style={{position:"absolute",top:-13,left:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.blue,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>✏️</button>
               <button onPointerDown={e=>e.stopPropagation()} onClick={async e=>{e.stopPropagation();
@@ -18375,6 +18390,24 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,
       cash_received:null},table.table_number,false);   // false = ยังไม่ชำระ → ใบมี QR ท้ายใบ
   }
+  // ลบรายการ "พิมพ์ไม่ออก" ของบิลนี้ออกจากที่ตัวพิมพ์บันทึกไว้
+  // อ่านของล่าสุดก่อนเขียนเสมอ — ตัวพิมพ์อาจเพิ่งเขียนคำสั่งอื่นลงไปในช่องเดียวกัน
+  async function clearPrintFail(){
+    if(!existingOrder?.id)return;
+    try{
+      const all=await api.getAllPrinters();
+      const mine=(all||[]).filter(p=>p.branch_id==null||+p.branch_id===+branch.id);
+      for(const p of mine){
+        let d={};try{d=JSON.parse(p.description||"{}");}catch{}
+        if(!Array.isArray(d.failed)||!d.failed.length)continue;
+        const kept=d.failed.filter(f=>String(f.orderId)!==String(existingOrder.id));
+        if(kept.length===d.failed.length)continue;
+        d.failed=kept;
+        await api.updatePrinter(p.id,{description:JSON.stringify(d)});
+      }
+    }catch(e){console.error("clearPrintFail",e);}
+  }
+
   function reprintReceipt(){
     if(!existingOrder?.id)return;
     const paid=existingOrder.status==="paid";
@@ -18543,6 +18576,26 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}</div>
       </div>
 
+      {(()=>{
+        // ใบครัวที่พิมพ์ไม่ออก — ระบบไม่ลองใหม่เอง พนักงานต้องกดเอง
+        // วางไว้เหนือรายการอาหาร เพราะถ้าซ่อนอยู่ล่างๆ จะไม่มีใครเห็น
+        const f=existingOrder?.id?printFailsOf(printers).get(String(existingOrder.id)):null;
+        if(!f)return null;
+        return <div style={{margin:"8px 8px 0",padding:"10px 12px",borderRadius:11,background:C.redLight,border:`1.5px solid ${C.red}`}}>
+          <div style={{fontSize:12.5,fontWeight:900,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>⚠️ ใบครัวไม่ออก</div>
+          <div style={{fontSize:11.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:8}}>
+            {(f.names||[]).join(" · ")}
+            <div style={{color:C.ink4,marginTop:3}}>ระบบไม่พิมพ์ซ้ำให้เอง — เช็คเครื่องพิมพ์กับสัญญาณให้พร้อมก่อน แล้วกดปุ่มด้านล่าง</div>
+          </div>
+          <Btn v="danger" icon={I.print} full s={{padding:"8px",fontSize:12.5}} onClick={async()=>{
+            const want=new Set(f.names||[]);
+            const list=items.filter(i=>want.has(i.name));
+            if(!list.length){posToast("ไม่พบรายการเหล่านี้ในบิลแล้ว","warn");await clearPrintFail();return;}
+            await agentReprint(list);
+            await clearPrintFail();
+          }}>พิมพ์ใบครัวรายการนี้อีกครั้ง</Btn>
+        </div>;
+      })()}
       <div style={{flex:1,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
@@ -21085,7 +21138,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
+      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
       {showOrders&&<SalesReportModal currentBranch={currentBranch} onClose={()=>setShowOrders(false)}/>}
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide noScroll>

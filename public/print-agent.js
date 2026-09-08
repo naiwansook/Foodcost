@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 31;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 32;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -189,7 +189,7 @@ let state = { sig: {}, init: {}, greeted: {} };
 // อ่านสำเร็จจริงไหม ไม่ใช่แค่ "ไฟล์มีอยู่" — ไฟดับกลางเขียนทำให้ไฟล์พังได้
 let stateLoaded = false;
 try { if (fs.existsSync(STATE_FILE)) { state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); stateLoaded = true; } } catch { console.log("⚠️  ไฟล์ความจำเสียหาย (ไฟดับกลางเขียน?) — เริ่มจำใหม่ ไม่พิมพ์ย้อนหลัง"); }
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.tries) state.tries = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
 // ⚠️ ต้องดู "อ่านความจำได้ไหม" ไม่ใช่ "ไฟล์มีอยู่ไหม"
 // ไฟล์พังแต่ยังอยู่ = ความจำว่างเปล่าแต่คิดว่าจำได้ → ทุกบิลที่เปิดอยู่กลายเป็น
 // บิลใหม่หมด แล้วพิมพ์ซ้ำทั้งร้าน (เกิดได้จริงตอนแบตหมดกลางจังหวะเขียนไฟล์)
@@ -334,7 +334,14 @@ async function printItems(items, tableNum, printers, alreadyDone) {
   // ผู้เรียกไม่มาร์ค sig → รายการที่พิมพ์ได้ถูกพิมพ์ซ้ำทุก 5 วินาทีไม่หยุด
   //
   // ลองใหม่เฉพาะกรณีที่ส่งไปแล้วไม่ผ่าน (กระดาษหมด/หลุดแลน) ซึ่งรอบหน้าอาจหายเอง
-  return { ok: !anyFail, okIds };
+  // รายการที่ "ไม่มีเครื่องไหนพิมพ์ให้สำเร็จเลย" — เอาไปแจ้งเตือนที่โต๊ะ
+  // เครื่องที่พิมพ์ผ่านไปแล้วรอบก่อน (alreadyDone) ถือว่าส่งถึงแล้ว ไม่นับว่าพลาด
+  const delivered = new Set([...okIds, ...Object.keys(alreadyDone || {}).map(Number)]);
+  const failedItems = items.filter(it => {
+    const hs = all.filter(p => printerHandles(p, it));
+    return hs.length > 0 && !hs.some(p => delivered.has(+p.id));
+  });
+  return { ok: !anyFail, okIds, failedItems };
 }
 
 // ทดสอบพิมพ์ตามคำสั่งจากแอป: แอปเขียน description.tp = เวลาที่กด → agent พิมพ์หน้าทดสอบให้เครื่องนั้นภายใน ~5 วินาที
@@ -418,6 +425,32 @@ async function handleScanRequests(printers) {
   }
 }
 
+// บันทึก "ใบครัวที่ไม่ออก" กลับเข้าระบบ ให้แอปเอาไปแจ้งเตือนที่โต๊ะนั้น
+// เจ้าของสั่งไว้ (8 ก.ย. 69): ห้ามลองพิมพ์ใหม่เอง แม้เน็ตกลับมาแล้วก็ห้าม
+// ให้พนักงานเป็นคนกดเองเมื่อมั่นใจว่าพร้อม — กระดาษที่ออกมาเองตอนไม่มีคนดู
+// คือใบที่ครัวอาจไม่เห็น หรือเห็นแล้วทำซ้ำกับที่ทำไปแล้ว
+async function recordPrintFail(printers, order, items) {
+  const target = (printers || []).find(p => p.ip) || (printers || [])[0];
+  if (!target || !items || !items.length) return;
+  try {
+    let d = {};
+    try { const r = await sb(`printers?id=eq.${target.id}&select=description`); if (r && r[0]) d = JSON.parse(r[0].description || "{}"); } catch {}
+    const list = Array.isArray(d.failed) ? d.failed : [];
+    // ทับรายการเดิมของบิลนี้ ไม่สะสมซ้ำทุกรอบ
+    const kept = list.filter(f => String(f.orderId) !== String(order.id));
+    kept.push({
+      at: Date.now(),
+      orderId: order.id,
+      table: order.table_number || "",
+      names: [...new Set(items.map(i => i.name))].slice(0, 20),
+      n: items.reduce((a, i) => a + (+i.qty || 0), 0),
+    });
+    d.failed = kept.slice(-30);   // เก็บล่าสุดพอ ไม่ให้ description บวม
+    await patchPrinter(target.id, { description: JSON.stringify(d) });
+    console.log(`  📌 บันทึกไว้ให้พนักงานกดพิมพ์เอง — โต๊ะ ${order.table_number}: ${d.failed[d.failed.length-1].names.join(", ")}`);
+  } catch (e) { console.log("  ⚠️ บันทึกรายการที่พิมพ์ไม่ผ่านไม่สำเร็จ:", e.message); }
+}
+
 let fullTick = 0;   // นับรอบไปหาตาข่ายนิรภัย
 async function tick() {
   let heads, printers;
@@ -463,7 +496,9 @@ async function tick() {
     // ใช้จำว่าเครื่องไหนพิมพ์ใบชุดนี้ผ่านไปแล้ว จะได้ไม่ส่งซ้ำตอนลองใหม่
     const dk = o.id + "|" + sig;
     const done = state.done[dk] || {};
+    let lastResult = null;
     const mark = r => {
+      lastResult = r;
       if (r && r.okIds && r.okIds.length) {
         state.done[dk] = { ...done };
         r.okIds.forEach(id => { state.done[dk][id] = 1; });
@@ -480,16 +515,13 @@ async function tick() {
       const items = newItemsVs(last, o.items);
       if (items.length) ok = mark(await printItems(items, o.table_number, printers, done));
     }
-    // จำกัดจำนวนครั้งที่ลองใหม่ — เครื่องที่ล่มจะไม่กลับมาภายในไม่กี่วินาที
-    // ลองไปเรื่อยๆ ไม่ช่วยอะไร มีแต่ทำให้สถานะค้างและ log ท่วม
-    // (ใบไม่ถูกพิมพ์ซ้ำอยู่แล้วเพราะข้ามเครื่องที่ผ่านแล้ว — ตัวนี้กันสถานะค้างอย่างเดียว)
+    // ── ไม่ลองพิมพ์ใหม่เองเด็ดขาด ────────────────────────────────────────
+    // เจ้าของสั่งไว้: พิมพ์ไม่สำเร็จให้ "แจ้งเตือนที่โต๊ะ" แล้วรอพนักงานกดเอง
+    // แม้เน็ตกลับมาปกติแล้วก็ห้ามส่งเอง — คนต้องเป็นคนตัดสินใจว่าพร้อมแล้ว
+    // มาร์คว่าจัดการแล้วทุกกรณี จะได้ไม่วนพิมพ์ (เคยทำกระดาษหมดม้วนมาแล้ว)
     if (!ok) {
-      const n = (state.tries[dk] || 0) + 1;
-      state.tries[dk] = n;
-      if (n >= 3) {
-        console.log(`  ⛔ พิมพ์ไม่ผ่าน ${n} ครั้ง — เลิกลองใหม่ (ไปเช็คเครื่องพิมพ์ที่ขึ้นจุดแดงในแอป)`);
-        ok = true;
-      }
+      await recordPrintFail(printers, o, (lastResult && lastResult.failedItems) || []);
+      ok = true;
     }
     // มาร์ค uat พร้อม sig เท่านั้น — ถ้าพิมพ์ไม่ผ่านแล้วเผลอมาร์ค uat ไว้
     // รอบหน้าจะเห็นว่า "ไม่เปลี่ยน" แล้วไม่เปิดดูรายการอีกเลย = ใบครัวหายถาวร
@@ -525,7 +557,6 @@ async function tick() {
     for (const k of Object.keys(state.uat)) if (!live.has(String(k))) delete state.uat[k];
     // done/tries คีย์เป็น "เลขบิล|สถานะรายการ" — ตัดเอาเลขบิลมาเทียบ
     for (const k of Object.keys(state.done)) if (!live.has(String(k).split("|")[0])) delete state.done[k];
-    for (const k of Object.keys(state.tries)) if (!live.has(String(k).split("|")[0])) delete state.tries[k];
   }
   saveState();
 }

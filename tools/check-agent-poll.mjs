@@ -296,9 +296,13 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   }
   ok_("orphan ดูจากเครื่องทั้งหมด ไม่ใช่เฉพาะที่ยังไม่ส่ง",
     SRC.includes("const orphan = items.filter(it => !all.some(p => printerHandles(p, it)));"));
-  ok_("printItems คืนรายชื่อเครื่องที่ผ่าน", SRC.includes("return { ok: !anyFail, okIds };"));
+  ok_("printItems คืนรายชื่อเครื่องที่ผ่าน + รายการที่ไม่ได้พิมพ์", SRC.includes("return { ok: !anyFail, okIds, failedItems };"));
   ok_("tick จำเครื่องที่ผ่านไว้ใน state.done", SRC.includes("const done = state.done[dk] || {};"));
-  ok_("ลองใหม่ได้ไม่เกิน 3 ครั้ง แล้วหยุด", SRC.includes("if (n >= 3) {") && SRC.includes("state.tries[dk] = n;"));
+  ok_("ไม่ลองพิมพ์ใหม่เองเลย (เจ้าของสั่ง: ให้แจ้งเตือนแล้วรอพนักงานกด)", !SRC.includes("state.tries"));
+  ok_("พิมพ์ไม่สำเร็จต้องบันทึกไว้ให้แอปแจ้งเตือนที่โต๊ะ",
+    SRC.includes("async function recordPrintFail(") && SRC.includes("await recordPrintFail(printers, o,"));
+  ok_("บันทึกแล้วมาร์คว่าจัดการแล้ว จะได้ไม่วนพิมพ์", SRC.includes("await recordPrintFail(printers, o, (lastResult && lastResult.failedItems) || []);"));
+  ok_("เก็บรายการล้มเหลวไม่ให้บวม (เก็บล่าสุดพอ)", SRC.includes("d.failed = kept.slice(-30);"));
   ok_("สถานะ done/tries ถูกเก็บกวาดตามบิลที่ปิดไป",
     SRC.includes("Object.keys(state.done)") && SRC.includes("delete state.done[k];"));
   ok_("orphan ไม่นับเป็นความล้มเหลว (ลองใหม่ก็ไม่หาย)", !SRC.includes("orphan.length === 0"));

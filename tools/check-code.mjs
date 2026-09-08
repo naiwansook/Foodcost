@@ -377,6 +377,13 @@ const guards = [
   ["นับป็อปอัพซ้อน ปลดล็อกเมื่อปิดตัวสุดท้าย", APP.includes("_modalDepth=Math.max(0,_modalDepth-1);") && APP.includes("if(_modalDepth===1){") && APP.includes("if(_modalDepth===0){")],
   ["Modal เรียกตัวล็อก", APP.includes("useScrollLock();") && APP.includes("function useScrollLock(){")],
   ["รูปจางยังพิมพ์ติด (ไม่หายเงียบ)", APP.includes("if(a>40&&lum<175)")],
+  // ── ใบครัวไม่ออก ต้องเห็นในระบบ ไม่ใช่หายเงียบ ──
+  // ระบบไม่พิมพ์ซ้ำเองแล้ว ถ้าไม่แสดงให้เห็น ครัวจะไม่รู้เลยว่ามีใบตกหล่น
+  ["มีตัวอ่านรายการที่พิมพ์ไม่ออก", APP.includes("const printFailsOf=(printers)=>")],
+  ["ผังโต๊ะขึ้นป้ายเตือนที่โต๊ะนั้น", APP.includes("⚠️ ใบครัวไม่ออก")],
+  ["ผังโต๊ะได้รับข้อมูลเครื่องพิมพ์", APP.includes("<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers}")],
+  ["จอสั่งอาหารมีปุ่มให้พนักงานกดพิมพ์เอง", APP.includes("พิมพ์ใบครัวรายการนี้อีกครั้ง")],
+  ["กดพิมพ์แล้วล้างรายการเตือนออก", APP.includes("async function clearPrintFail()") && APP.includes("await clearPrintFail();")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
