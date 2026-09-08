@@ -18555,20 +18555,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}</div>
       </div>
 
-      {/* Quick action bar */}
-      {existingOrder?.id&&<div style={{padding:"6px 8px",borderBottom:`1px solid ${C.line}`,background:"#FFF8F6",display:"flex",gap:4,flexWrap:"wrap"}}>
-        <button onClick={reprintReceipt} title="พิมพ์ใบเสร็จซ้ำ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.blue}`,borderRadius:7,background:C.blueLight,cursor:"pointer",fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
-          <Ic d={I.bill} s={12} c={C.blue}/>ใบเสร็จ
-        </button>
-        <button onClick={()=>setShowSplitBill(true)} title="แบ่งจ่าย" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.purple}`,borderRadius:7,background:C.purpleLight,cursor:"pointer",fontSize:11,color:C.purple,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
-          <Ic d={I.users} s={12} c={C.purple}/>แบ่งจ่าย
-        </button>
-        <button onClick={cancelOrder} title="ยกเลิกออเดอร์ทั้งโต๊ะ" style={{display:"flex",alignItems:"center",justifyContent:"center",gap:3,padding:"6px 8px",border:`1px solid #FCA5A5`,borderRadius:7,background:C.redLight,cursor:"pointer",fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
-          <Ic d={I.trash} s={12} c={C.red}/>ยกเลิก
-        </button>
-      </div>}
-
-      {/* Item list */}
       <div style={{flex:1,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
@@ -18646,7 +18632,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const tabBtn=(k,label)=><button key={k} onClick={()=>setSplitMode(k)} style={{flex:1,padding:"8px 4px",borderRadius:9,cursor:"pointer",
         fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,
         border:`1.5px solid ${splitMode===k?C.brand:C.line}`,background:splitMode===k?C.brandLight:C.white,color:splitMode===k?C.brand:C.ink3}}>{label}</button>;
-      return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
+      return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4500,padding:16}}>
         <div style={{background:C.white,borderRadius:16,width:"100%",maxWidth:"min(96vw,440px)",maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={{padding:"18px 20px 12px",flexShrink:0}}>
             <div style={{fontWeight:800,fontSize:17,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>แบ่งจ่าย — โต๊ะ {table.table_number}</div>
@@ -18733,7 +18719,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       </div>;
     })()}
 
-    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR}/>}
+    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR}
+      onSplit={()=>setShowSplitBill(true)} onReprint={reprintReceipt} onCancelOrder={cancelOrder}/>}
   </div>;
 }
 
@@ -18743,7 +18730,7 @@ const PAY_METHODS=[
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
-function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR}){
+function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onReprint,onCancelOrder}){
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
@@ -18821,6 +18808,21 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:`linear-gradient(135deg,${C.green},#059669)`,borderRadius:10,marginBottom:10,color:C.white}}>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:700}}>ยอดสุทธิ</span>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        </div>
+        {/* งานรองของบิลนี้ — ย้ายมาจากแถบเดิมบนจอสั่งอาหาร */}
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          <button onClick={onReprint} title="พิมพ์ใบเสร็จซ้ำ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
+            border:`1px solid ${C.blue}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.blue}}>
+            <Ic d={I.bill} s={13} c={C.blue}/>ใบเสร็จ
+          </button>
+          <button onClick={onSplit} title="แบ่งจ่ายหลายคน" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
+            border:`1px solid ${C.purple}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.purple}}>
+            <Ic d={I.users} s={13} c={C.purple}/>แบ่งจ่าย
+          </button>
+          <button onClick={onCancelOrder} title="ยกเลิกบิลทั้งโต๊ะ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
+            border:`1px solid ${C.red}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.red}}>
+            <Ic d={I.trash} s={13} c={C.red}/>ยกเลิกบิล
+          </button>
         </div>
         <div style={{display:"flex",gap:10,alignItems:"stretch"}}>
           <Btn v="primary" onClick={onPrintQR} icon={I.print}
@@ -21329,7 +21331,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <input type="checkbox" checked={sRcpt} onChange={e=>setSRcpt(e.target.checked)} style={{accentColor:C.green,width:19,height:19,cursor:"pointer",flexShrink:0}}/>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:13.5,fontWeight:800,color:sRcpt?C.green:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ</div>
-            <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เช็คบิล/พิมพ์ใบเสร็จซ้ำ/แยกบิล จะพิมพ์ออกเครื่องนี้ · ติ๊กได้หลายเครื่อง — ใบเสร็จจะออกทุกเครื่องที่เลือก</div>
+            <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เช็คบิล/พิมพ์ใบเสร็จซ้ำ/แบ่งจ่าย จะพิมพ์ออกเครื่องนี้ · ติ๊กได้หลายเครื่อง — ใบเสร็จจะออกทุกเครื่องที่เลือก</div>
           </div>
         </label>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"15px 0 8px",flexWrap:"wrap",gap:8}}>

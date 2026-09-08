@@ -327,7 +327,7 @@ const guards = [
   // ── ปุ่มในแถบจัดการบิล ──
   ["เอาปุ่มพิมพ์ครัวออกแล้ว", !APP.includes('title="พิมพ์ใบครัวซ้ำทั้งหมด (ผ่านตัวพิมพ์)"')],
   ["พิมพ์ซ้ำรายรายการยังอยู่", APP.includes("agentReprint([item])")],
-  ["ปุ่มเปลี่ยนชื่อเป็น 'แบ่งจ่าย'", APP.includes('title="แบ่งจ่าย"') && !APP.includes('title="แยกบิล"')],
+  ["เรียกว่า 'แบ่งจ่าย' ไม่ใช่ 'แยกบิล' แล้ว", APP.includes("แบ่งจ่าย") && !APP.includes("แยกบิล")],
   ["แบ่งจ่ายมีครบสามแบบ",
     APP.includes('tabBtn("even","เท่ากัน")') && APP.includes('tabBtn("item","ตามรายการ")') && APP.includes('tabBtn("amount","ระบุยอด")')],
   ["โหมดระบุยอดกันใส่เกินยอดบิล", APP.includes("Math.max(0,Math.min(total,+String(splitAmt)")],
@@ -352,6 +352,13 @@ const guards = [
   ["ปุ่มพิมพ์ QR เป็นสีส้มเด่น ไม่ใช่ปุ่มโปร่ง",
     APP.includes('<Btn v="primary" onClick={onPrintQR}') && !APP.includes('<Btn v="ghost" onClick={onPrintQR}')],
   ["ปุ่มพิมพ์ QR ใหญ่พอๆ กับปุ่มยืนยัน", APP.includes('s={{flex:"1 1 44%",padding:"15px 12px",fontSize:15.5')],
+  // แถบสามปุ่มบนจอสั่งอาหารถูกย้ายเข้าป็อปอัพเช็คบิล — ไม่ใช่ลบความสามารถทิ้ง
+  // ยกเลิกบิล/พิมพ์ใบเสร็จซ้ำ ไม่มีทางเข้าอื่นเลย ถ้าหายไปคือทำไม่ได้อีกเลย
+  ["แถบสามปุ่มออกจากจอสั่งอาหารแล้ว", !APP.includes("{/* Quick action bar */}")],
+  ["ยกเลิกบิลยังเข้าถึงได้ (ในป็อปอัพเช็คบิล)", APP.includes("onClick={onCancelOrder}") && APP.includes("onCancelOrder={cancelOrder}")],
+  ["พิมพ์ใบเสร็จซ้ำยังเข้าถึงได้", APP.includes("onClick={onReprint}") && APP.includes("onReprint={reprintReceipt}")],
+  ["แบ่งจ่ายย้ายเข้าป็อปอัพเช็คบิล", APP.includes("onClick={onSplit}") && APP.includes("onSplit={()=>setShowSplitBill(true)}")],
+  ["ป็อปอัพแบ่งจ่ายซ้อนเหนือเช็คบิล (ไม่ไปโผล่ข้างหลัง)", APP.includes("zIndex:4500")],
   ["ใบ QR จ่ายเงินใช้ยอดสด ไม่ใช่ยอดจากแถวบิลที่ยังไม่ปิด",
     APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(manualDiscount),total,")],
   // ── ป็อปอัพเลื่อนแล้วพื้นหลังต้องอยู่นิ่ง ──
