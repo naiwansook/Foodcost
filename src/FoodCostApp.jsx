@@ -19875,6 +19875,7 @@ function genPromptPayPayload(id,amount){
 function POSSettingsFields({s:settings,set}){
   // ตัวอย่าง QR ที่สร้างจากเบอร์ — โชว์เฉพาะตอนไม่ได้แนบรูปเอง
   const qrPreview=settings.show_qr_promptpay&&settings.promptpay_id?genPromptPayPayload(settings.promptpay_id,100):"";
+  return <>
     {/* VAT */}
     <Card style={{padding:18,marginBottom:14}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
@@ -19980,6 +19981,7 @@ function POSSettingsFields({s:settings,set}){
       </div>
     </Card>
 
+  </>;
 }
 
 function POSSettingsPanel({currentBranch}){
