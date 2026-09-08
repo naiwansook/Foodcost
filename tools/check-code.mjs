@@ -26,6 +26,20 @@ const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", im
 // ── ประกอบสตรีม ESC/POS ของใบ QR: ดึงนิพจน์จริงมารัน ────────────────────
 // ใบ QR ประกอบจาก 3 ชิ้น (หัวเป็นรูป → QR เนทีฟ → ท้ายเป็นรูป) ถ้า init/ตัดกระดาษ
 // ไม่ตรงจังหวะ กระดาษจะตัดกลางใบหรือใบถัดไปเพี้ยน — ต้องพิสูจน์ ไม่ใช่ค้นข้อความ
+// ── ดึงตัวคำนวณแบ่งจ่ายเท่ากันมารัน ──────────────────────────────────────
+// เงินล้วนๆ — หารไม่ลงตัวแล้วปล่อยเศษหาย = ร้านเก็บเงินขาดทุกบิล
+const splitEvenlyOf = (() => {
+  const st = APP.indexOf("const splitEvenly=(total,n)=>{");
+  if (st < 0) throw new Error("ไม่เจอ splitEvenly");
+  let d = 0, started = false, en = -1;
+  for (let i = st; i < APP.length; i++) {
+    if (APP[i] === "{") { d++; started = true; }
+    else if (APP[i] === "}") { d--; if (started && d === 0) { en = APP.indexOf(";", i) + 1; break; } }
+  }
+  return new Function(APP.slice(st, en) + " return splitEvenly;")();
+})();
+const sumOf = a => Math.round(a.reduce((x, y) => x + y, 0) * 100) / 100;
+
 const escHead = (() => {
   const ln = APP.split("\n").find(l => l.includes("const head=[...(opts&&opts.noInit?[]"));
   if (!ln) throw new Error("ไม่เจอบรรทัดประกอบหัวสตรีม");
@@ -291,6 +305,33 @@ const guards = [
   ["ทาง LAN ส่งใบ QR เป็นคำสั่งรูป (pj) ไม่ใช่ข้อความ",
     APP.includes('cmdDesc(p,"pj",{at,b64})') && !APP.includes('cmdDesc(p,"qr",{at,url')],
   ["ทางบลูทูธส่งเป็นไบต์ ไม่ใช่ base64", APP.includes("btPrint(b64Bytes(await buildTableQRB64(table,branch,url))")],
+  // ── แบ่งจ่าย: ยอดต้องบวกกลับได้เท่าเดิมเป๊ะทุกกรณี ──
+  ["฿1000 หาร 3 คน บวกกลับได้ 1000 พอดี", sumOf(splitEvenlyOf(1000, 3)) === 1000],
+  ["฿1000 หาร 3 คน = 333.34 + 333.33 + 333.33", splitEvenlyOf(1000, 3).join(",") === "333.34,333.33,333.33"],
+  ["เศษ 1 สตางค์ไม่หาย", sumOf(splitEvenlyOf(0.01, 3)) === 0.01],
+  ["หารลงตัวก็ต้องเท่ากันทุกคน", splitEvenlyOf(900, 3).join(",") === "300,300,300"],
+  ["คนเดียวได้เต็มยอด", splitEvenlyOf(1234.56, 1).join(",") === "1234.56"],
+  ["จำนวนคนเพี้ยน (0) ไม่ทำให้ยอดหาย", sumOf(splitEvenlyOf(500, 0)) === 500],
+  ["สุ่ม 400 กรณี ยอดกระทบกันครบทุกกรณี", (() => {
+    for (let t = 1; t <= 20; t++) for (let n = 1; n <= 20; n++) {
+      const amt = Math.round((t * 137.77 + n * 3.19) * 100) / 100;
+      const parts = splitEvenlyOf(amt, n);
+      if (parts.length !== n) return false;
+      if (sumOf(parts) !== amt) return false;
+      if (parts.some(p => p < 0)) return false;
+      // ต่างกันได้ไม่เกิน 1 สตางค์ ไม่งั้นไม่เรียกว่าแบ่งเท่ากัน
+      if (Math.round((Math.max(...parts) - Math.min(...parts)) * 100) > 1) return false;
+    }
+    return true;
+  })()],
+  // ── ปุ่มในแถบจัดการบิล ──
+  ["เอาปุ่มพิมพ์ครัวออกแล้ว", !APP.includes('title="พิมพ์ใบครัวซ้ำทั้งหมด (ผ่านตัวพิมพ์)"')],
+  ["พิมพ์ซ้ำรายรายการยังอยู่", APP.includes("agentReprint([item])")],
+  ["ปุ่มเปลี่ยนชื่อเป็น 'แบ่งจ่าย'", APP.includes('title="แบ่งจ่าย"') && !APP.includes('title="แยกบิล"')],
+  ["แบ่งจ่ายมีครบสามแบบ",
+    APP.includes('tabBtn("even","เท่ากัน")') && APP.includes('tabBtn("item","ตามรายการ")') && APP.includes('tabBtn("amount","ระบุยอด")')],
+  ["โหมดระบุยอดกันใส่เกินยอดบิล", APP.includes("Math.max(0,Math.min(total,+String(splitAmt)")],
+  ["แบ่งจ่ายไม่ปิดบิล (ปิดบิลยังทำที่เช็คบิลที่เดียว)", APP.includes('payment_method:"split"') && !APP.includes('setSplitDone(p=>({...p,[key]:true}));await saveOrder')],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

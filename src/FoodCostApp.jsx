@@ -1405,6 +1405,16 @@ const hasRecipe=(m)=>!!m&&Array.isArray(m.ingredients)&&m.ingredients.length>0;
 // ตอนนี้ทุกที่อ่าน menus.category อย่างเดียว · คอลัมน์ local_categories ยังคงอยู่ในฐานข้อมูล
 // ไม่ได้ลบทิ้ง เผื่อต้องย้อนกลับ แต่ไม่มีโค้ดไหนอ่านมันแล้ว
 const menuCatOf=(m)=>{const c=String((m&&m.category)||"").trim();return c||null;};
+// แบ่งยอดเท่ากัน n คน — คิดเป็นสตางค์เพื่อให้ "บวกกลับได้เท่าเดิมเป๊ะ"
+// หารไม่ลงตัวเป็นเรื่องปกติ (฿1000 / 3) เศษสตางค์ต้องไปตกอยู่กับใครสักคน
+// ไม่ใช่หายไปเฉยๆ — ร้านจะเก็บเงินขาดทุกบิลที่หารไม่ลง
+// ให้คนแรกๆ รับเศษไปคนละ 1 สตางค์ (มาตรฐาน POS ทั่วไป)
+const splitEvenly=(total,n)=>{
+  const k=Math.max(1,Math.floor(+n||1));
+  const cents=Math.round((+total||0)*100);
+  const base=Math.floor(cents/k),extra=cents-base*k;
+  return Array.from({length:k},(_,i)=>(base+(i<extra?1:0))/100);
+};
 // เครื่องพิมพ์ของสาขานี้ = ของสาขาตัวเอง + ที่ตั้งเป็น "ทุกสาขา" (branch_id=null)
 // กติกาเดียวกับที่ print-agent.js ใช้เลือกเครื่องของตัวเอง — ต้องตรงกัน
 // ไม่งั้นในจอเห็นเครื่องของสาขาอื่น แต่กดสั่งพิมพ์แล้วไม่มีตัวไหนรับ
@@ -18142,6 +18152,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const[cashRcv,setCashRcv]=useState("");
   const[voidIdx,setVoidIdx]=useState(null);
   const[showSplitBill,setShowSplitBill]=useState(false);
+  const[splitMode,setSplitMode]=useState("even");   // even = เท่ากัน · item = ตามรายการ · amount = ระบุยอด
+  const[splitN,setSplitN]=useState(2);
+  const[splitAmt,setSplitAmt]=useState("");
+  const[splitDone,setSplitDone]=useState({});       // จำว่าพิมพ์ส่วนไหนไปแล้ว กันพิมพ์ซ้ำ/ตกหล่น
   const[splitSel,setSplitSel]=useState({});
 
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
@@ -18484,14 +18498,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
       {/* Quick action bar */}
       {existingOrder?.id&&<div style={{padding:"6px 8px",borderBottom:`1px solid ${C.line}`,background:"#FFF8F6",display:"flex",gap:4,flexWrap:"wrap"}}>
-        <button onClick={()=>agentReprint(items)} title="พิมพ์ใบครัวซ้ำทั้งหมด (ผ่านตัวพิมพ์)" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.line}`,borderRadius:7,background:C.white,cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
-          <Ic d={I.print} s={12} c={C.ink3}/>พิมพ์ครัว
-        </button>
         <button onClick={reprintReceipt} title="พิมพ์ใบเสร็จซ้ำ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.blue}`,borderRadius:7,background:C.blueLight,cursor:"pointer",fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
           <Ic d={I.bill} s={12} c={C.blue}/>ใบเสร็จ
         </button>
-        <button onClick={()=>setShowSplitBill(true)} title="แยกบิล" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.purple}`,borderRadius:7,background:C.purpleLight,cursor:"pointer",fontSize:11,color:C.purple,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
-          <Ic d={I.users} s={12} c={C.purple}/>แยกบิล
+        <button onClick={()=>setShowSplitBill(true)} title="แบ่งจ่าย" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.purple}`,borderRadius:7,background:C.purpleLight,cursor:"pointer",fontSize:11,color:C.purple,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
+          <Ic d={I.users} s={12} c={C.purple}/>แบ่งจ่าย
         </button>
         <button onClick={cancelOrder} title="ยกเลิกออเดอร์ทั้งโต๊ะ" style={{display:"flex",alignItems:"center",justifyContent:"center",gap:3,padding:"6px 8px",border:`1px solid #FCA5A5`,borderRadius:7,background:C.redLight,cursor:"pointer",fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
           <Ic d={I.trash} s={12} c={C.red}/>ยกเลิก
@@ -18556,43 +18567,112 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     {/* Add-on option picker (staff) */}
     {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branch?.id,optionLib)} onConfirm={(chosen,qty)=>addItemWithOptions(optPick,chosen,qty)} onClose={()=>setOptPick(null)}/>}
 
-    {/* Split bill modal */}
-    {showSplitBill&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
-      <div style={{background:C.white,borderRadius:16,width:"100%",maxWidth:"min(95vw,380px)",padding:20}}>
-        <div style={{fontWeight:800,fontSize:16,color:C.ink,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>แยกบิล — โต๊ะ {table.table_number}</div>
-        <div style={{fontSize:12,color:C.ink3,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>เลือกรายการที่ต้องการแยกจ่าย</div>
-        <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto",marginBottom:14}}>
-          {items.map((item,idx)=><label key={idx} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:splitSel[idx]?C.brandLight:C.lineLight,borderRadius:9,border:`1.5px solid ${splitSel[idx]?C.brand:C.line}`,cursor:"pointer"}}>
-            <input type="checkbox" checked={!!splitSel[idx]} onChange={e=>setSplitSel(p=>({...p,[idx]:e.target.checked}))} style={{width:16,height:16,accentColor:C.brand}}/>
-            <div style={{flex:1,fontFamily:"'Sarabun',sans-serif"}}>
-              <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{item.qty}x {item.name}</div>
-              {item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}
+    {/* ── แบ่งจ่าย (split payment) ────────────────────────────────────────
+        สามแบบตามที่ร้านอาหารใช้กันจริง:
+          เท่ากัน   — หารยอดสุทธิตามจำนวนคน (เศษสตางค์ตกที่คนแรกๆ ไม่ปล่อยหาย)
+          ตามรายการ — ใครสั่งอะไรจ่ายอันนั้น ส่วนลด/SC/VAT เฉลี่ยตามสัดส่วน
+          ระบุยอด  — ใส่เองว่าคนนี้จ่ายเท่าไร ที่เหลือค่อยว่ากัน
+        ใบที่ออกเป็น "ใบแจ้งยอดสำหรับแบ่งจ่าย" ไม่ใช่การปิดบิล — ปิดบิลจริง
+        ยังทำที่ปุ่มเช็คบิลเหมือนเดิม เพื่อไม่ให้ยอดขายถูกบันทึกซ้ำซ้อน ── */}
+    {showSplitBill&&(()=>{
+      const closeSplit=()=>{setShowSplitBill(false);setSplitSel({});setSplitAmt("");setSplitDone({});};
+      const parts=splitEvenly(total,splitN);
+      const amtNum=Math.max(0,Math.min(total,+String(splitAmt).replace(/[^0-9.]/g,"")||0));
+      const printShare=(key,label,amt)=>{
+        if(!(amt>0)){alert("ยอดต้องมากกว่า 0");return;}
+        smartPrintReceipt({items:[{name:label,qty:1,price:amt}],subtotal:amt,discount:0,total:amt,
+          payment_method:"split",service_charge:0,vat:0,vat_rate:0,vat_included:vatIncluded},table.table_number,false);
+        setSplitDone(p=>({...p,[key]:true}));
+      };
+      const tabBtn=(k,label)=><button key={k} onClick={()=>setSplitMode(k)} style={{flex:1,padding:"8px 4px",borderRadius:9,cursor:"pointer",
+        fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,
+        border:`1.5px solid ${splitMode===k?C.brand:C.line}`,background:splitMode===k?C.brandLight:C.white,color:splitMode===k?C.brand:C.ink3}}>{label}</button>;
+      return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
+        <div style={{background:C.white,borderRadius:16,width:"100%",maxWidth:"min(96vw,440px)",maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"18px 20px 12px",flexShrink:0}}>
+            <div style={{fontWeight:800,fontSize:17,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>แบ่งจ่าย — โต๊ะ {table.table_number}</div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:6,marginBottom:12}}>
+              <span style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ยอดสุทธิทั้งบิล</span>
+              <span style={{fontSize:20,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{total.toFixed(2)}</span>
             </div>
-            <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</div>
-          </label>)}
+            <div style={{display:"flex",gap:6}}>{tabBtn("even","เท่ากัน")}{tabBtn("item","ตามรายการ")}{tabBtn("amount","ระบุยอด")}</div>
+          </div>
+
+          <div style={{flex:1,overflowY:"auto",padding:"0 20px"}}>
+            {splitMode==="even"&&<>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,padding:"10px 0 14px"}}>
+                <button onClick={()=>setSplitN(n=>Math.max(2,n-1))} style={{width:40,height:40,borderRadius:11,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:20,fontWeight:800,color:C.ink2}}>−</button>
+                <div style={{textAlign:"center",minWidth:78}}>
+                  <div style={{fontSize:26,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.1}}>{splitN}</div>
+                  <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>คน</div>
+                </div>
+                <button onClick={()=>setSplitN(n=>Math.min(20,n+1))} style={{width:40,height:40,borderRadius:11,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:20,fontWeight:800,color:C.ink2}}>+</button>
+              </div>
+              {parts.length>1&&parts[0]!==parts[parts.length-1]&&<div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6}}>
+                หารไม่ลงตัว — เศษสตางค์ตกที่คนแรกๆ คนละ 1 สตางค์ รวมกันแล้วเท่ากับยอดบิลพอดี
+              </div>}
+              <div style={{display:"flex",flexDirection:"column",gap:6,paddingBottom:14}}>
+                {parts.map((amt,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:10,
+                  background:splitDone["e"+i]?C.greenLight:C.lineLight,border:`1px solid ${splitDone["e"+i]?C.green:"transparent"}`}}>
+                  <div style={{flex:1,fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>คนที่ {i+1}{splitDone["e"+i]?" · พิมพ์แล้ว":""}</div>
+                  <div style={{fontSize:15,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{amt.toFixed(2)}</div>
+                  <button onClick={()=>printShare("e"+i,`แบ่งจ่าย ${i+1}/${splitN}`,amt)} style={{border:"none",background:C.brand,color:C.white,borderRadius:8,padding:"6px 11px",cursor:"pointer",fontSize:11.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์</button>
+                </div>)}
+              </div>
+            </>}
+
+            {splitMode==="item"&&<>
+              <div style={{fontSize:12,color:C.ink3,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>เลือกรายการที่คนนี้จ่าย — ส่วนลด/ค่าบริการ/VAT เฉลี่ยตามสัดส่วนให้อัตโนมัติ</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+                {items.map((item,idx)=><label key={idx} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:splitSel[idx]?C.brandLight:C.lineLight,borderRadius:10,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!splitSel[idx]} onChange={e=>setSplitSel(p=>({...p,[idx]:e.target.checked}))} style={{width:16,height:16,accentColor:C.brand}}/>
+                  <div style={{flex:1,fontFamily:"'Sarabun',sans-serif"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{item.qty}x {item.name}</div>
+                    {item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}
+                  </div>
+                  <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</div>
+                </label>)}
+              </div>
+              <div style={{background:C.brandLight,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.brand}}>รวมที่เลือก</span>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.brand}}>฿{splitSubtotal.toFixed(0)}</span>
+              </div>
+            </>}
+
+            {splitMode==="amount"&&<>
+              <div style={{fontSize:12,color:C.ink3,margin:"4px 0 10px",fontFamily:"'Sarabun',sans-serif"}}>ใส่ยอดที่คนนี้จ่าย เช่น จ่ายแทนเพื่อนบางส่วน</div>
+              <input type="text" inputMode="decimal" value={splitAmt} onChange={e=>setSplitAmt(e.target.value.replace(/[^0-9.]/g,""))}
+                placeholder="0.00" style={{...iS,fontSize:22,fontWeight:800,textAlign:"center",padding:"12px 14px"}}/>
+              <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
+                {[0.25,0.5,0.75,1].map(f=><button key={f} onClick={()=>setSplitAmt(String(round2(total*f)))} style={{flex:1,minWidth:64,padding:"7px 4px",borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{f===1?"เต็มยอด":Math.round(f*100)+"%"}</button>)}
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"12px 2px 16px",fontFamily:"'Sarabun',sans-serif"}}>
+                <span style={{fontSize:13,color:C.ink3}}>คงเหลือให้คนอื่นจ่าย</span>
+                <span style={{fontSize:16,fontWeight:900,color:total-amtNum>0?C.ink:C.green}}>฿{(total-amtNum).toFixed(2)}</span>
+              </div>
+            </>}
+          </div>
+
+          <div style={{display:"flex",gap:8,padding:"12px 20px 18px",borderTop:`1px solid ${C.line}`,flexShrink:0}}>
+            <Btn v="ghost" onClick={closeSplit} full s={{padding:"9px"}}>ปิด</Btn>
+            {splitMode==="item"&&<Btn icon={I.print} onClick={()=>{
+              if(splitItems.length===0){alert("กรุณาเลือกรายการ");return;}
+              // เฉลี่ยส่วนลด/ค่าบริการ/VAT ตามสัดส่วนของยอดที่เลือก เทียบยอดก่อนลดทั้งบิล
+              // ถ้าไม่เฉลี่ย คนที่แยกจ่ายจะรวมกันแล้วจ่ายเกินยอดจริงของบิล
+              const ratio=subtotal>0?splitSubtotal/subtotal:0;
+              const splitDisc=round2(totalDiscount*ratio);
+              const splitBase=Math.max(0,splitSubtotal-splitDisc);
+              const splitSC=round2(sc*ratio),splitVAT=round2(vat*ratio);
+              const splitTotal=round2(vatIncluded?splitBase+splitSC:splitBase+splitSC+splitVAT);
+              smartPrintReceipt({items:splitItems,subtotal:splitSubtotal,discount:splitDisc,total:splitTotal,payment_method:"split",
+                service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded,
+                ...(promoDiscount>0?{promo_amount:round2(promoDiscount*ratio),promo_name:selectedPromo&&selectedPromo.name}:{})},table.table_number,false);
+            }} full s={{padding:"9px"}}>พิมพ์ใบแบ่งจ่าย</Btn>}
+            {splitMode==="amount"&&<Btn icon={I.print} onClick={()=>printShare("a","แบ่งจ่าย (ระบุยอด)",amtNum)} full s={{padding:"9px"}}>พิมพ์ใบแบ่งจ่าย</Btn>}
+          </div>
         </div>
-        <div style={{background:C.brandLight,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.brand}}>รวมที่เลือก</span>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.brand}}>฿{splitSubtotal.toFixed(0)}</span>
-        </div>
-        <div style={{display:"flex",gap:8}}>
-          <Btn v="ghost" onClick={()=>{setShowSplitBill(false);setSplitSel({});}} full s={{padding:"9px"}}>ปิด</Btn>
-          <Btn icon={I.print} onClick={()=>{if(splitItems.length===0){alert("กรุณาเลือกรายการ");return;}
-            // Compute proportional SC/VAT for the split (relative to original subtotal)
-            const ratio=subtotal>0?splitSubtotal/subtotal:0;
-            // เฉลี่ยส่วนลดตามสัดส่วนเดียวกับ SC/VAT — เดิมส่ง discount:0 ทำให้บิลแยก
-            // ไม่มีส่วนลดเลย ลูกค้ากลุ่มที่แยกจ่ายรวมกันแล้วจ่ายเกินยอดจริงของบิล
-            const splitDisc=round2(totalDiscount*ratio);
-            const splitBase=Math.max(0,splitSubtotal-splitDisc);
-            const splitSC=round2(sc*ratio),splitVAT=round2(vat*ratio);
-            const splitTotal=round2(vatIncluded?splitBase+splitSC:splitBase+splitSC+splitVAT);
-            smartPrintReceipt({items:splitItems,subtotal:splitSubtotal,discount:splitDisc,total:splitTotal,payment_method:"split",
-              service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded,
-              ...(promoDiscount>0?{promo_amount:round2(promoDiscount*ratio),promo_name:selectedPromo&&selectedPromo.name}:{})},table.table_number,false);
-          }} full s={{padding:"9px"}}>พิมพ์บิลแยก (ตัวอย่าง)</Btn>
-        </div>
-      </div>
-    </div>}
+      </div>;
+    })()}
 
     {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings}/>}
   </div>;
