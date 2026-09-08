@@ -350,6 +350,13 @@ const guards = [
   ["ปุ่มในป็อปอัพชำระเงินเป็นพิมพ์ QR จ่ายเงิน", APP.includes("onClick={onPrintQR}") && APP.includes("พิมพ์ QR จ่ายเงิน")],
   ["ใบ QR จ่ายเงินใช้ยอดสด ไม่ใช่ยอดจากแถวบิลที่ยังไม่ปิด",
     APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(manualDiscount),total,")],
+  // ── ป็อปอัพเลื่อนแล้วพื้นหลังต้องอยู่นิ่ง ──
+  ["กันเลื่อนทะลุไปพื้นหลัง", APP.includes("div{overscroll-behavior:contain}")],
+  ["ล็อกหน้าไม่ให้เลื่อนตอนเปิดป็อปอัพ", APP.includes("body.modal-open{overflow:hidden}") && APP.includes("document.body.classList.add(\"modal-open\")")],
+  ["นับป็อปอัพซ้อน ปลดล็อกเมื่อปิดตัวสุดท้าย",
+    APP.includes("_modalDepth=Math.max(0,_modalDepth-1);") && APP.includes("if(_modalDepth===0)document.body.classList.remove(\"modal-open\")")],
+  ["Modal เรียกตัวล็อก", APP.includes("useScrollLock();") && APP.includes("function useScrollLock(){")],
+  ["รูปจางยังพิมพ์ติด (ไม่หายเงียบ)", APP.includes("if(a>40&&lum<175)")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
