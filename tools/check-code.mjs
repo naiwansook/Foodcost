@@ -19,6 +19,20 @@ const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", im
 // ไม่ใช่แค่ค้นหาข้อความ — เคยพลาดมาแล้ว: แบ็กสแลชใน regex หายตอนเขียนไฟล์
 // กลายเป็น /^d+$/ ซึ่งไม่แมตช์เลขสาขาเลย ทางลัดจึงยังพาไปหลังบ้านเหมือนเดิม
 // ด่านที่ค้นแค่ข้อความมองไม่เห็นบั๊กแบบนั้น ต้องรันถึงจะจับได้
+
+// ── ดึง printerHandles ตัวจริงจาก print-agent.js มารัน ────────────────────
+// นี่คือกติกาที่ตัดสินว่าใบไหนออกเครื่องไหน ผิดแล้วครัวได้ใบผิด/ไม่ได้ใบ
+// ตั้งแต่เลิกใช้ catch-all (categories:null) ยิ่งต้องพิสูจน์ว่ากติกายังตรง
+const handlesOf = (() => {
+  const st = AGENT.indexOf("function printerHandles(p, it) {");
+  if (st < 0) throw new Error("ไม่เจอ printerHandles");
+  let d = 0, started = false, en = -1;
+  for (let i = st; i < AGENT.length; i++) {
+    if (AGENT[i] === "{") { d++; started = true; }
+    else if (AGENT[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+  }
+  return new Function(AGENT.slice(st, en) + " return printerHandles;")();
+})();
 function pickManifest(search) {
   const st = HTML.indexOf("(function () {");
   const en = HTML.indexOf("})();", st);
@@ -161,7 +175,8 @@ const guards = [
   ["บิลถูกปิดกลางทาง = แจ้ง ไม่แอบสร้างบิลใหม่", APP.includes('if(sawOpenBill)throw new Error("บิลของโต๊ะนี้เพิ่งถูกปิด')],
   ["เขียนบิลล็อกสถานะด้วย ไม่ใช่แค่ updated_at", APP.includes('&status=neq.paid&status=neq.cancelled`, { method:"PATCH"')],
   ["ยกเลิกรายการ แจ้งครัว", APP.includes("❌ ยกเลิก: ${target.name}")],
-  ["เครื่องพิมพ์ 'รับทุกหมวด' เก็บเป็น null ไม่ใช่ []", APP.includes("categories:sAllCats?null:sCats")],
+  // เดิมเคยบังคับว่า "รับทุกหมวด" ต้องเก็บเป็น null — เลิกใช้แล้ว (8 ก.ย. 69)
+  // เจ้าของสั่งให้ตัดตัวเลือกนั้นทิ้ง ให้ติ๊กหมวดเป็นตัวตัดสินอย่างเดียว
   ["ปิดกะดึงบิลครบทั้งกะ (ไม่ตัดที่ 200)", APP.includes("api.getPOSOrdersSince(currentBranch.id,shift.opened_at)")],
   ["บิลแยกเฉลี่ยส่วนลด", APP.includes("const splitDisc=round2(totalDiscount*ratio);")],
   ["เมนูในมือถือลูกค้ารีเฟรชระหว่างมื้อ", APP.includes("menuPollId=setInterval")],
@@ -213,6 +228,30 @@ const guards = [
   })()],
   ["มีสคริปต์สร้าง manifest รายสาขา", fs.existsSync(new URL("./make-pos-manifests.mjs", new URL("../scripts/", import.meta.url)))],
   ["build เรียกสคริปต์สร้าง manifest", JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts.build.includes("make-pos-manifests")],
+  // ── กติกา "เครื่องไหนรับหมวดอะไร" (รันฟังก์ชันจริงจากตัวพิมพ์) ──
+  ["ติ๊กหมวดไหน = รับเฉพาะหมวดนั้น",
+    handlesOf({ id: 1, categories: ["ชาบู"] }, { category: "ชาบู" }) === true &&
+    handlesOf({ id: 1, categories: ["ชาบู"] }, { category: "หมูกระทะ" }) === false],
+  ["ล้างหมดแล้ว = ไม่รับอะไรเลย (ไม่ใช่รับทุกอย่าง)",
+    handlesOf({ id: 1, categories: [] }, { category: "ชาบู" }) === false],
+  ["ปักหมุดเมนูไว้ที่เครื่องไหน = ออกเครื่องนั้นเท่านั้น",
+    handlesOf({ id: 7, categories: [] }, { printer_id: 7, category: "ชาบู" }) === true &&
+    handlesOf({ id: 8, categories: ["ชาบู"] }, { printer_id: 7, category: "ชาบู" }) === false],
+  ["เครื่องเก่าที่ยังเป็น null ยังรับทุกหมวดอยู่ (ของเดิมไม่พัง)",
+    handlesOf({ id: 1, categories: null }, { category: "อะไรก็ได้" }) === true],
+  // ── เลิกใช้ catch-all: ติ๊กคือตัวตัดสินอย่างเดียว ──
+  ["แอปไม่มีการ์ด 'รับทุกหมวด' แล้ว", !APP.includes("รับทุกหมวด (พิมพ์ทุกเมนู)") && !APP.includes("sAllCats")],
+  ["แอปไม่มีปุ่ม catch-all แล้ว", !APP.includes("ทุกหมวด (catch-all)")],
+  ["บันทึกหมวดเป็นรายการเสมอ ไม่เขียน null",
+    APP.includes("categories:sCats,description") && APP.includes("categories:catSel||[...allCategories]")],
+  ["เปิดเครื่องเดิมที่เป็น null มาให้ติ๊กครบ (ตรงกับที่มันทำอยู่จริง)",
+    APP.includes("setSCats(Array.isArray(p.categories)?[...p.categories]:[...branchCategories])")],
+  ["ปุ่มเลือกทุกหมวด/ล้าง ยังทำงานตรงไปตรงมา",
+    APP.includes("setSCats([...branchCategories])") && APP.includes("setSCats([])") &&
+    APP.includes("setCatSel([...allCategories])") && APP.includes("setCatSel([])")],
+  // ── ปุ่มส่งรายการต้องอยู่กับที่ ──
+  ["จอสั่งอาหารใช้โมดัลแบบไม่เลื่อนทั้งก้อน", APP.includes("onDone={loadAll}") && APP.includes("loadAll();}} wide noScroll>")],
+  ["แผงสั่งอาหารไม่ยืนกรานความสูง 75vh แล้ว", !APP.includes('minHeight:isMobile?"calc(100vh - 60px)":"75vh"')],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

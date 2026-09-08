@@ -18400,7 +18400,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const quickKeys=useMemo(()=>menus.filter(m=>m.quick_key_pos!=null).sort((a,b)=>(a.quick_key_pos||0)-(b.quick_key_pos||0)),[menus]);
 
   const itemTotalQty=items.reduce((s,i)=>s+i.qty,0);
-  return <div style={{display:"flex",flexDirection:isMobile?"column":"row",height:"100%",minHeight:isMobile?"calc(100vh - 60px)":"75vh"}}>
+  // flex:1 + minHeight:0 = กินความสูงที่โมดัลเหลือให้พอดี แล้วปล่อยให้ลูกข้างใน
+  // (กริดเมนู / รายการในตะกร้า) เลื่อนเองทีละส่วน ส่วนท้ายที่มีปุ่มส่งรายการอยู่กับที่
+  // เดิมใส่ minHeight 75vh ไว้ ซึ่งดันแผงให้สูงเกินโมดัลจนตัวโมดัลต้องเลื่อนแทน
+  return <div style={{display:"flex",flexDirection:isMobile?"column":"row",flex:1,minHeight:0}}>
     {/* Mobile: tab switcher */}
     {isMobile&&<div style={{display:"flex",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0,position:"sticky",top:0,zIndex:5}}>
       <button onClick={()=>setMobileView("menu")} style={{flex:1,padding:"12px 10px",border:"none",background:mobileView==="menu"?C.brandLight:C.white,color:mobileView==="menu"?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13,borderBottom:`3px solid ${mobileView==="menu"?C.brand:"transparent"}`,minHeight:48}}>🍽️ เมนู</button>
@@ -20471,7 +20474,8 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
     if(!catEditP)return;
     setCatSaving(true);
     try{
-      await api.updatePrinter(catEditP.id,{categories:catSel});
+      // เก็บเป็นรายการเสมอ — null คือ catch-all ซึ่งเลิกใช้แล้ว
+      await api.updatePrinter(catEditP.id,{categories:catSel||[...allCategories]});
       // Save menu-level overrides
       const updates=[];
       menus.forEach(m=>{const newPid=catMenuOverride[m.id]||null;const oldPid=m.printer_id||null;if(String(newPid)!==String(oldPid))updates.push(api.updateMenu(m.id,{printer_id:newPid}));});
@@ -20661,7 +20665,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
             {/* Categories badge */}
             {(()=>{const cats=p.categories;const overrideCount=menus.filter(m=>+m.printer_id===p.id).length;return <div style={{marginTop:6,padding:"7px 11px",borderRadius:8,background:cats===null||cats===undefined?C.greenLight:cats.length===0?C.lineLight:"#FEF3C7",border:`1px solid ${cats===null||cats===undefined?"#86EFAC":cats.length===0?C.line:"#FDE68A"}`,fontSize:11,fontFamily:"'Sarabun',sans-serif",color:cats===null||cats===undefined?C.green:cats.length===0?C.ink4:"#92400E",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
               <span style={{fontWeight:800}}>🍳 รับผิดชอบ:</span>
-              <span style={{fontWeight:600}}>{cats===null||cats===undefined?"ทุกหมวด (catch-all)":cats.length===0?"ไม่รับงานอัตโนมัติ":cats.join(", ")}</span>
+              <span style={{fontWeight:600}}>{cats===null||cats===undefined?"ทุกหมวด (ค่าเดิม — เปิดตั้งค่าแล้วกดบันทึกเพื่อระบุหมวด)":cats.length===0?"ไม่รับงานอัตโนมัติ":cats.join(", ")}</span>
               {overrideCount>0&&<span style={{marginLeft:"auto",background:C.purpleLight,color:C.purple,padding:"1px 8px",borderRadius:10,fontSize:10,fontWeight:700}}>+{overrideCount} เมนู (override)</span>}
             </div>;})()}
             {p.branch_id&&(branches||[]).find(b=>b.id===p.branch_id)&&<div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:6,display:"flex",alignItems:"center",gap:5}}><Ic d={I.branch} s={12} c={C.ink4}/>สาขา: <b>{branches.find(b=>b.id===p.branch_id)?.name}</b></div>}
@@ -20677,22 +20681,18 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:8}}>
           <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📂 หมวดหมู่</div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>setCatSel(null)} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${catSel===null?C.green:C.line}`,background:catSel===null?C.greenLight:C.white,color:catSel===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกหมวด (catch-all)</button>
             <button onClick={()=>setCatSel([...allCategories])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทั้งหมด</button>
             <button onClick={()=>setCatSel([])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
           </div>
         </div>
-        {catSel===null
-          ?<div style={{padding:"14px 16px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.7}}>
-            ✅ <b>Catch-all</b> — เครื่องนี้รับงานพิมพ์ทุกหมวด<br/>
-            <span style={{fontSize:11,fontWeight:400}}>ใช้เป็น "เครื่องสำรอง" — ระบบจะส่งงานมาที่นี่ถ้าไม่มีเครื่องอื่น match หมวดของเมนู</span>
-          </div>
-          :allCategories.length===0
+        {allCategories.length===0
             ?<div style={{padding:30,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีหมวดหมู่เมนู — เพิ่มหมวดในแท็บ "เมนู" ก่อน</div>
             :<>
               <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto",paddingRight:2}}>
                 {allCategories.map(c=>{
-                  const has=catSel.includes(c);
+                  // catSel เป็น null = เครื่องเก่าที่เคยเป็น catch-all → ถือว่าติ๊กครบ
+                  // (ตรงกับที่มันทำอยู่จริง) · [] = ล้างแล้ว ต้องไม่กลายเป็นครบ
+                  const has=(catSel||allCategories).includes(c);
                   const catMenus=menusInCat(c);
                   const isOpen=openCats.has(c);
                   const pinnedHereCount=catMenus.filter(m=>{const cur=catMenuOverride[m.id];return cur!=null&&+cur===+catEditP.id;}).length;
@@ -20897,8 +20897,8 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
       {showOrders&&<SalesReportModal currentBranch={currentBranch} onClose={()=>setShowOrders(false)}/>}
     </div>
-    {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+    {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide noScroll>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10,flexShrink:0}}>
         <button onClick={()=>printTableQR(selTable,currentBranch,printers)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
@@ -20927,7 +20927,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const[settingsP,setSettingsP]=useState(null);      // เครื่องที่เปิดป๊อบอัพ "กำหนดการพิมพ์" อยู่ (null=ปิด)
   const[sName,setSName]=useState("");                // ชื่อที่กำลังแก้
   const[sCats,setSCats]=useState([]);
-  const[sAllCats,setSAllCats]=useState(false);   // true = categories:null (รับทุกหมวด) — ต้องเก็บแยก ไม่งั้นถูกกลืนเป็น []                // หมวดที่เครื่องนี้รับ ([]=ยังไม่กำหนด/ไม่รับ · [ชื่อ]=เฉพาะหมวดนั้น) — ไม่มี catch-all แล้ว
+  // หมวดที่เครื่องนี้รับ: [] = ไม่รับอะไรเลย · [ชื่อ] = เฉพาะหมวดนั้น
+  // ไม่มี catch-all แล้ว — ติ๊กคือตัวตัดสินอย่างเดียว ไม่มีสถานะซ่อนทับ
   const[sOverride,setSOverride]=useState({});        // menu_id → printer_id (ปักหมุดเมนูเฉพาะให้ออกเครื่องนี้)
   const[sOpenCats,setSOpenCats]=useState(()=>new Set());  // หมวดที่กางดูรายเมนู
   const[sSaving,setSSaving]=useState(false);
@@ -21086,9 +21087,9 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c);
   function openSettings(p){
     setSettingsP(p);setSName(p.name||"");
-    // categories = null/undefined คือ "รับทุกหมวด" — ต้องจำไว้ ไม่ใช่แปลงเป็น [] แล้วเขียนทับ
-    setSAllCats(p.categories==null);
-    setSCats(Array.isArray(p.categories)?[...p.categories]:[]);   // null/undefined → [] (ต้องเลือกหมวดเอง)
+    // เครื่องเก่าที่เก็บ categories=null คือ "รับทุกหมวด" อยู่เดิม — เปิดมาให้ติ๊กครบทุกหมวด
+    // เพื่อให้เห็นตรงกับที่มันทำอยู่จริง ไม่ใช่โชว์ว่าไม่ได้ติ๊กอะไรแต่แอบพิมพ์ทุกอย่าง
+    setSCats(Array.isArray(p.categories)?[...p.categories]:[...branchCategories]);
     let dd={};try{dd=JSON.parse(p.description||"{}");}catch{}setSRcpt(dd.rcpt===1);
     const ov={};(menus||[]).forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});setSOverride(ov);setSOpenCats(new Set());
   }
@@ -21102,8 +21103,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       let fresh=p;try{const all=await api.getAllPrinters();const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}
       let dd={};try{dd=JSON.parse(fresh.description||"{}");}catch{}
       if(sRcpt)dd.rcpt=1;else delete dd.rcpt;
-      // รับทุกหมวด = เก็บ null (ไม่ใช่ [] ซึ่งแปลว่าไม่รับอะไรเลย)
-      await api.updatePrinter(p.id,{name,categories:sAllCats?null:sCats,description:JSON.stringify(dd)});
+      // เก็บเป็นรายการเสมอ ไม่เขียน null อีกแล้ว — null คือ catch-all ซึ่งเลิกใช้
+      await api.updatePrinter(p.id,{name,categories:sCats,description:JSON.stringify(dd)});
       const ups=[];(menus||[]).forEach(m=>{const nw=sOverride[m.id]||null;const ol=m.printer_id||null;if(String(nw)!==String(ol))ups.push(api.updateMenu(m.id,{printer_id:nw}));});
       if(ups.length)await Promise.all(ups);
       await load();if(reloadMenus)await reloadMenus();
@@ -21151,20 +21152,6 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
             <button onClick={()=>setSCats([])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
           </div>
         </div>
-        <label style={{display:"flex",alignItems:"center",gap:9,padding:"11px 13px",marginBottom:10,borderRadius:11,cursor:"pointer",
-          background:sAllCats?C.greenLight:C.bg,border:`1.5px solid ${sAllCats?C.green:C.line}`}}>
-          <input type="checkbox" checked={sAllCats} onChange={e=>setSAllCats(e.target.checked)} style={{width:18,height:18,accentColor:C.green}}/>
-          <div>
-            <div style={{fontSize:13.5,fontWeight:800,color:sAllCats?C.green:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🖨️ รับทุกหมวด (พิมพ์ทุกเมนู)</div>
-            <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>
-              เปิดไว้ = เครื่องนี้พิมพ์ทุกอย่างที่สั่ง ไม่ต้องเลือกหมวด · ปิดแล้วค่อยเลือกหมวดด้านล่าง
-            </div>
-          </div>
-        </label>
-        {sAllCats&&<div style={{padding:"9px 12px",marginBottom:10,borderRadius:10,background:C.brandLight,border:`1px solid ${C.brand}44`,
-          fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
-          กำลังรับทุกหมวด — การเลือกหมวดด้านล่างจะยังไม่ถูกใช้จนกว่าจะเอาเครื่องหมายถูกด้านบนออก
-        </div>}
         {branchCategories.length===0
             ?<div style={{padding:24,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>ยังไม่มีหมวดหมู่ในสาขานี้ — ไปสร้างหมวดหมู่ที่หน้า "เมนู" ก่อน แล้วค่อยกลับมาเลือก</div>
             :<>
