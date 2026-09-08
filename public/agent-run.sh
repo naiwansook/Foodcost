@@ -9,7 +9,15 @@
 #  ตัวอย่าง:  sh agent-run.sh 6
 # ════════════════════════════════════════════════════════════════════════
 termux-wake-lock 2>/dev/null
-BR="${1:-6}"
+# เลขสาขา: จากอาร์กิวเมนต์ ถ้าไม่ใส่ก็อ่านจากไฟล์ ~/.foodcost-branch
+# ไม่มีค่าเริ่มต้น — ลืมใส่แล้วแอบรันเป็นสาขาอื่นคือพิมพ์ใบผิดร้าน
+BR="${1:-$(cat "$HOME/.foodcost-branch" 2>/dev/null | tr -dc '0-9')}"
+if [ -z "$BR" ]; then
+  echo "❌ ไม่รู้ว่าเป็นสาขาไหน"
+  echo "   ใส่เลขสาขาตอนรัน:   sh agent-run.sh 8"
+  echo "   หรือตั้งค่าไว้ครั้งเดียว:   echo 8 > \$HOME/.foodcost-branch"
+  exit 2
+fi
 URL="https://foodcost-eta.vercel.app/print-agent.js"
 cd "$HOME" || exit 1
 
