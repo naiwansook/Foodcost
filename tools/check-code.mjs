@@ -576,6 +576,25 @@ const guards = [
     && APP.includes('const paid=orders.filter(o=>o.status==="paid");')],
   ["บิลเก่าที่ไม่มีบันทึกต้องบอกตรงๆ ว่าไม่มี ไม่ใช่เว้นว่าง",
     APP.includes("— ไม่มีบันทึก (ยกเลิกก่อนเปิดระบบบันทึก) —")],
+  // ── จอสั่งอาหารค้างตอนลากนิ้ว/กดรัว (เจ้าของแจ้ง 8 ก.ย. 69) ──
+  // iOS ไม่สนใจ user-scalable=no จึงยังรอ "แตะสองทีเพื่อซูม" ก่อนยิง click ทุกครั้ง
+  // globalStyle เดิมใส่ touch-action ไว้แค่ที่ button — การ์ดเมนูเป็น div เลยยังหน่วง
+  ["ตัดหน่วงแตะสองทีทั้งแอป ไม่ใช่แค่ปุ่ม",
+    APP.includes("-webkit-tap-highlight-color:transparent;touch-action:manipulation}")],
+  // ลากนิ้วผ่านกริด 169 ใบ = Safari ยิง mouseenter ไล่ทีละใบ แต่ละครั้งเขียน style ตรงๆ
+  // บวก transition:"all" ที่สั่งให้เฝ้าทุกคุณสมบัติ = งานวาดจอต่อเนื่องตลอดการลาก
+  ["การ์ดเมนูไม่มีตัวจับเมาส์ที่เขียน style ระหว่างลากนิ้ว", (()=>{
+    const i=APP.indexOf("{filtered.map(m=>{const soldOut=");
+    if(i<0)return false;
+    const card=APP.slice(i,APP.indexOf("</div>;})}",i));
+    return !card.includes("onMouseEnter") && !card.includes("onMouseLeave") && !card.includes('transition:"all');
+  })()],
+  ["การ์ดเมนูใช้คลาส mcard (ยกเว้นเมนูที่วันนี้หมด)",
+    APP.includes('className={soldOut?undefined:"mcard"}')],
+  // hover บนจอสัมผัสไม่มีความหมาย และทำให้การ์ดค้างไฮไลต์หลังแตะ — ต้องกันไว้ที่ CSS
+  ["hover ของการ์ดเมนูจำกัดเฉพาะเครื่องที่มีเมาส์จริง",
+    APP.includes("@media(hover:hover){.mcard:hover{")],
+  ["แตะแล้วต้องเห็นว่าติด (ตอบสนองด้วย CSS ไม่ใช่ JS)", APP.includes(".mcard:active{")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
