@@ -378,9 +378,13 @@ const guards = [
   // ยกเลิกบิล/พิมพ์ใบเสร็จซ้ำ ไม่มีทางเข้าอื่นเลย ถ้าหายไปคือทำไม่ได้อีกเลย
   ["แถบสามปุ่มออกจากจอสั่งอาหารแล้ว", !APP.includes("{/* Quick action bar */}")],
   ["แถบ 'ยอดนิยม' ออกจากจอสั่งอาหารแล้ว", !APP.includes("quickKeys")],
-  ["ยกเลิกบิลยังเข้าถึงได้ (ในป็อปอัพเช็คบิล)", APP.includes("onClick={onCancelOrder}") && APP.includes("onCancelOrder={cancelOrder}")],
-  ["พิมพ์ใบเสร็จซ้ำยังเข้าถึงได้", APP.includes("onClick={onReprint}") && APP.includes("onReprint={reprintReceipt}")],
-  ["แบ่งจ่ายย้ายเข้าป็อปอัพเช็คบิล", APP.includes("onClick={onSplit}") && APP.includes("onSplit={()=>setShowSplitBill(true)}")],
+  // ปุ่ม "ใบเสร็จ" ถูกถอดออก (เจ้าของสั่ง — ไม่ได้ใช้) ป๊อบอัพนี้เปิดได้เฉพาะบิลที่ยังไม่ชำระ
+  // มันจึงพิมพ์ "ใบแจ้งยอด" ซึ่งซ้ำกับที่ปุ่มพิมพ์ QR จ่ายเงินพิมพ์อยู่แล้ว ต่างแค่ไม่มี QR
+  ["ปุ่มใบเสร็จออกจากป๊อบอัพเช็คบิลแล้ว", !APP.includes("<Ic d={I.bill} s={13} c={C.blue}/>ใบเสร็จ")],
+  ["ไม่เหลือตัวจัดการที่ไม่มีใครเรียก", !APP.includes("onReprint") && !APP.includes("reprintReceipt")],
+  // ถอดปุ่มนี้แล้วต้องไม่พลอยถอดงานอื่นในแถวเดียวกันไปด้วย
+  ["ยกเลิกบิลยังอยู่ในแถวเดิม", APP.includes("onClick={onCancelOrder}") && APP.includes("onCancelOrder={cancelOrder}")],
+  ["แบ่งจ่ายยังอยู่ในแถวเดิม", APP.includes("onClick={onSplit}") && APP.includes("onSplit={()=>setShowSplitBill(true)}")],
   ["ป็อปอัพแบ่งจ่ายซ้อนเหนือเช็คบิล (ไม่ไปโผล่ข้างหลัง)", APP.includes("zIndex:4500")],
   ["ใบ QR จ่ายเงินใช้ยอดสด ไม่ใช่ยอดจากแถวบิลที่ยังไม่ปิด",
     APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(manualDiscount),total,")],

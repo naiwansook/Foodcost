@@ -18414,27 +18414,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     }catch(e){console.error("clearPrintFail",e);}
   }
 
-  function reprintReceipt(){
-    if(!existingOrder?.id)return;
-    const paid=existingOrder.status==="paid";
-    const pm=existingOrder.payment_method||payMethod;
-    // NEVER mix generations. An UNPAID row only carries the raw item subtotal (posAppendItems
-    // never computes service charge / exclusive VAT), so taking `total` from it while falling
-    // back to the LIVE service_charge/vat printed a bill — and a PromptPay QR — for less than
-    // the customer owes. Stored breakdown is authoritative only once the sale is paid.
-    // The slip prints "ส่วนลดรวม" AND a separate promo line, so `discount` must carry only the
-    // MANUAL part — passing the combined total double-deducts the promo on paper.
-    const data=paid
-      ? {...existingOrder,items,payment_method:pm,discount:round2(Math.max(0,(+existingOrder.discount||0)-(+existingOrder.promo_amount||0)))}
-      : {...existingOrder,items,payment_method:pm,
-         subtotal,discount:round2(manualDiscount),total,
-         service_charge:sc,service_charge_rate:scRate,vat,vat_rate:vatRate,vat_included:vatIncluded,
-         subtotal_after_disc:subAfterDisc,
-         promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,
-         cash_received:pm==="cash"?(+cashRcv||total):null};
-    smartPrintReceipt(data,table.table_number,paid);
-  }
-
   async function saveOrder(){
     if(savingRef.current)return;   // กดซ้ำ/ghost-click — ครัวจะได้ออเดอร์สองใบ
     if(!items.length){alert("กรุณาเลือกเมนูก่อนครับ");return;}
@@ -18767,7 +18746,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     })()}
 
     {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR}
-      onSplit={()=>setShowSplitBill(true)} onReprint={reprintReceipt} onCancelOrder={cancelOrder}/>}
+      onSplit={()=>setShowSplitBill(true)} onCancelOrder={cancelOrder}/>}
   </div>;
 }
 
@@ -18777,7 +18756,7 @@ const PAY_METHODS=[
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
-function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onReprint,onCancelOrder}){
+function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onCancelOrder}){
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
@@ -18858,10 +18837,6 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         </div>
         {/* งานรองของบิลนี้ — ย้ายมาจากแถบเดิมบนจอสั่งอาหาร */}
         <div style={{display:"flex",gap:8,marginBottom:10}}>
-          <button onClick={onReprint} title="พิมพ์ใบเสร็จซ้ำ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
-            border:`1px solid ${C.blue}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.blue}}>
-            <Ic d={I.bill} s={13} c={C.blue}/>ใบเสร็จ
-          </button>
           <button onClick={onSplit} title="แบ่งจ่ายหลายคน" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
             border:`1px solid ${C.purple}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.purple}}>
             <Ic d={I.users} s={13} c={C.purple}/>แบ่งจ่าย
