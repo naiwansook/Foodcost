@@ -355,6 +355,7 @@ const guards = [
   // แถบสามปุ่มบนจอสั่งอาหารถูกย้ายเข้าป็อปอัพเช็คบิล — ไม่ใช่ลบความสามารถทิ้ง
   // ยกเลิกบิล/พิมพ์ใบเสร็จซ้ำ ไม่มีทางเข้าอื่นเลย ถ้าหายไปคือทำไม่ได้อีกเลย
   ["แถบสามปุ่มออกจากจอสั่งอาหารแล้ว", !APP.includes("{/* Quick action bar */}")],
+  ["แถบ 'ยอดนิยม' ออกจากจอสั่งอาหารแล้ว", !APP.includes("quickKeys")],
   ["ยกเลิกบิลยังเข้าถึงได้ (ในป็อปอัพเช็คบิล)", APP.includes("onClick={onCancelOrder}") && APP.includes("onCancelOrder={cancelOrder}")],
   ["พิมพ์ใบเสร็จซ้ำยังเข้าถึงได้", APP.includes("onClick={onReprint}") && APP.includes("onReprint={reprintReceipt}")],
   ["แบ่งจ่ายย้ายเข้าป็อปอัพเช็คบิล", APP.includes("onClick={onSplit}") && APP.includes("onSplit={()=>setShowSplitBill(true)}")],

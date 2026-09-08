@@ -18503,7 +18503,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const splitSubtotal=splitItems.reduce((s,i)=>s+i.price*i.qty,0);
 
   // Quick keys: pinned menus
-  const quickKeys=useMemo(()=>menus.filter(m=>m.quick_key_pos!=null).sort((a,b)=>(a.quick_key_pos||0)-(b.quick_key_pos||0)),[menus]);
 
   const itemTotalQty=items.reduce((s,i)=>s+i.qty,0);
   // flex:1 + minHeight:0 = กินความสูงที่โมดัลเหลือให้พอดี แล้วปล่อยให้ลูกข้างใน
@@ -18520,10 +18519,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>}
     {/* Left: menu */}
     <div style={{flex:1,display:isMobile&&mobileView!=="menu"?"none":"flex",flexDirection:"column",borderRight:isMobile?"none":`1px solid ${C.line}`,minWidth:0,minHeight:0}}>
-      {quickKeys.length>0&&<div style={{padding:"7px 10px",background:`linear-gradient(135deg,${C.yellowLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0,alignItems:"center"}}>
-        <span style={{fontSize:11,fontWeight:800,color:"#92400E",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",marginRight:4}}>⭐ ยอดนิยม</span>
-        {quickKeys.map(m=><button key={m.id} onClick={()=>addItem(m)} title={m.name} style={{padding:"5px 10px",border:`1.5px solid ${C.brand}`,borderRadius:8,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.brand,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:5}}>{m.name} <span style={{color:C.brandDark,fontWeight:900}}>฿{m.price}</span></button>)}
-      </div>}
       <div style={{padding:"8px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"4px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
