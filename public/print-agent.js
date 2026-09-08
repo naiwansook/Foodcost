@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 29;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 30;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -187,7 +187,7 @@ function sendToPrinter(ip, port, buf) {
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.tries) state.tries = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -265,9 +265,15 @@ function printerHandles(p, it) {
   const c = String(it.category).trim();
   return p.categories.some(x => String(x).trim() === c);
 }
-async function printItems(items, tableNum, printers) {
+// alreadyDone = { [printerId]: 1 } เครื่องที่พิมพ์ "ใบชุดนี้" สำเร็จไปแล้วในรอบก่อน
+// คืนค่า { ok, okIds } — okIds คือเครื่องที่เพิ่งส่งผ่าน
+//
+// ⚠️ หัวใจของการกันพิมพ์ท่วม: ถ้าเครื่องหนึ่งล่ม อีกเครื่องต้องไม่โดนส่งซ้ำ
+// เดิมส่งไปทุกเครื่องทุกรอบ เครื่องที่ดีจึงพิมพ์ใบเดิมทุก 5 วินาทีไม่หยุด
+async function printItems(items, tableNum, printers, alreadyDone) {
   // ส่งรายการไป "ทุกเครื่องที่ตั้งค่าให้รับ" (ไม่ใช่เครื่องเดียว) — ตั้งทุกเครื่องพิมพ์ทุกหมวด = ออกทุกเครื่อง · ตั้งคนละหมวด = แยกกัน · ตรงตามที่ตั้งใน "กำหนดการพิมพ์"
-  const usable = (printers || []).filter(p => !isBluetooth(p) && p.ip);
+  const all = (printers || []).filter(p => !isBluetooth(p) && p.ip);
+  const usable = all.filter(p => !(alreadyDone && alreadyDone[p.id]));   // ข้ามเครื่องที่ผ่านแล้ว
   // เรนเดอร์ทุกใบ "ครั้งเดียว พร้อมกัน" แล้วใช้ซ้ำกับทุกเครื่องที่รับรายการนั้น (ไม่เรนเดอร์ซ้ำต่อเครื่อง, ไม่เรียงทีละใบ)
   const bufs = await renderItemBufs(items, tableNum);
   // ส่งไปทุกเครื่องพร้อมกัน (คนละเครื่อง = ไม่ชนกัน) — เครื่องเดียวกันไม่ถูกยิงซ้อน เพราะ tick พิมพ์ทีละออเดอร์
@@ -279,12 +285,15 @@ async function printItems(items, tableNum, printers) {
     return { p, buf: Buffer.concat(parts.map(x => x.buf)), mode: bufsMode(parts), n: idxs.length };
   }).filter(Boolean);
   let anyFail = false;
+  const okIds = [];
   await Promise.all(jobs.map(({ p, buf, mode, n }) =>
     sendToPrinter(p.ip, p.port, buf)
-      .then(() => console.log(`  ✅ พิมพ์ ${n} รายการ [${mode}] → ${p.name} (${p.ip})`))
+      .then(() => { okIds.push(p.id); console.log(`  ✅ พิมพ์ ${n} รายการ [${mode}] → ${p.name} (${p.ip})`); })
       .catch(e => { anyFail = true; console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); })
   ));
-  const orphan = items.filter(it => !usable.some(p => printerHandles(p, it)));
+  // orphan ดูจากเครื่องทั้งหมด ไม่ใช่เฉพาะที่ยังไม่ได้พิมพ์ — ไม่งั้นพอเครื่องที่รับ
+  // หมวดนั้นพิมพ์ผ่านแล้ว รอบถัดไปจะหลงคิดว่าไม่มีเครื่องรับ แล้วรายงานผิด
+  const orphan = items.filter(it => !all.some(p => printerHandles(p, it)));
   if (orphan.length) {
     console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
     // เขียนกลับให้แอปเห็น — ไม่งั้นรู้อยู่คนเดียวบนจอ Termux ครัวไม่ได้ใบแล้วไม่มีใครรู้
@@ -308,7 +317,7 @@ async function printItems(items, tableNum, printers) {
   // ผู้เรียกไม่มาร์ค sig → รายการที่พิมพ์ได้ถูกพิมพ์ซ้ำทุก 5 วินาทีไม่หยุด
   //
   // ลองใหม่เฉพาะกรณีที่ส่งไปแล้วไม่ผ่าน (กระดาษหมด/หลุดแลน) ซึ่งรอบหน้าอาจหายเอง
-  return !anyFail;
+  return { ok: !anyFail, okIds };
 }
 
 // ทดสอบพิมพ์ตามคำสั่งจากแอป: แอปเขียน description.tp = เวลาที่กด → agent พิมพ์หน้าทดสอบให้เครื่องนั้นภายใน ~5 วินาที
@@ -433,15 +442,37 @@ async function tick() {
     // มาร์คว่า "จัดการแล้ว" เฉพาะเมื่อพิมพ์ผ่านจริง — ถ้ากระดาษหมด/หลุดแลน
     // ต้องปล่อยให้ sig เดิมค้างไว้ รอบถัดไป (5 วิ) จะลองพิมพ์ให้ใหม่เอง
     let ok = true;
+    // คีย์ของ "ใบชุดนี้" = ออเดอร์ + สถานะรายการ ณ ตอนนี้
+    // ใช้จำว่าเครื่องไหนพิมพ์ใบชุดนี้ผ่านไปแล้ว จะได้ไม่ส่งซ้ำตอนลองใหม่
+    const dk = o.id + "|" + sig;
+    const done = state.done[dk] || {};
+    const mark = r => {
+      if (r && r.okIds && r.okIds.length) {
+        state.done[dk] = { ...done };
+        r.okIds.forEach(id => { state.done[dk][id] = 1; });
+      }
+      return r ? r.ok : true;
+    };
     if (first) {
       console.log(`🆕 ออเดอร์ใหม่ โต๊ะ ${o.table_number} (${new Date().toLocaleTimeString("th-TH")})`);
       const items = last ? newItemsVs(last, o.items) : o.items;
-      if (items.length) ok = await printItems(items, o.table_number, printers);
+      if (items.length) ok = mark(await printItems(items, o.table_number, printers, done));
       if (ok) state.init[o.id] = 1;
     } else if (last && last !== sig) {
       console.log(`➕ เพิ่มรายการ โต๊ะ ${o.table_number}`);
       const items = newItemsVs(last, o.items);
-      if (items.length) ok = await printItems(items, o.table_number, printers);
+      if (items.length) ok = mark(await printItems(items, o.table_number, printers, done));
+    }
+    // จำกัดจำนวนครั้งที่ลองใหม่ — เครื่องที่ล่มจะไม่กลับมาภายในไม่กี่วินาที
+    // ลองไปเรื่อยๆ ไม่ช่วยอะไร มีแต่ทำให้สถานะค้างและ log ท่วม
+    // (ใบไม่ถูกพิมพ์ซ้ำอยู่แล้วเพราะข้ามเครื่องที่ผ่านแล้ว — ตัวนี้กันสถานะค้างอย่างเดียว)
+    if (!ok) {
+      const n = (state.tries[dk] || 0) + 1;
+      state.tries[dk] = n;
+      if (n >= 3) {
+        console.log(`  ⛔ พิมพ์ไม่ผ่าน ${n} ครั้ง — เลิกลองใหม่ (ไปเช็คเครื่องพิมพ์ที่ขึ้นจุดแดงในแอป)`);
+        ok = true;
+      }
     }
     // มาร์ค uat พร้อม sig เท่านั้น — ถ้าพิมพ์ไม่ผ่านแล้วเผลอมาร์ค uat ไว้
     // รอบหน้าจะเห็นว่า "ไม่เปลี่ยน" แล้วไม่เปิดดูรายการอีกเลย = ใบครัวหายถาวร
@@ -475,6 +506,9 @@ async function tick() {
     for (const k of Object.keys(state.sig)) if (!live.has(String(k))) delete state.sig[k];
     for (const k of Object.keys(state.init)) if (!live.has(String(k))) delete state.init[k];
     for (const k of Object.keys(state.uat)) if (!live.has(String(k))) delete state.uat[k];
+    // done/tries คีย์เป็น "เลขบิล|สถานะรายการ" — ตัดเอาเลขบิลมาเทียบ
+    for (const k of Object.keys(state.done)) if (!live.has(String(k).split("|")[0])) delete state.done[k];
+    for (const k of Object.keys(state.tries)) if (!live.has(String(k).split("|")[0])) delete state.tries[k];
   }
   saveState();
 }

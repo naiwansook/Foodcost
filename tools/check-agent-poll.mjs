@@ -58,7 +58,7 @@ ok_("หัวบิลไม่ลาก items มาด้วย",
 const FULL_EVERY = 60;
 function makeWorld() {
   return {
-    state: { sig: {}, init: {}, uat: {} },
+    state: { sig: {}, init: {}, uat: {}, done: {}, tries: {} },
     primed: true,
     fullTick: 0,
     printed: [],            // ทุกใบที่สั่งพิมพ์ [โต๊ะ, จำนวนรายการ]
@@ -278,6 +278,31 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("บิลใหม่พิมพ์ใบเดียว ไม่ปนกับบิลเก่า", w.printed.length === 2);
 }
 
+
+
+// ── กันพิมพ์ท่วมเมื่อเครื่องหนึ่งล่ม (บั๊กจริง 8 ก.ย. 69) ────────────────
+// เครื่อง "ครัว" ต่อไม่ติด → ส่งไม่ผ่าน → ตัวพิมพ์วนส่งใหม่ทั้งชุดทุก 5 วินาที
+// เครื่องแคชเชียร์ที่ปกติดีจึงพิมพ์ใบเดิมซ้ำไม่หยุด กระดาษหมดม้วน
+{
+  const ln = SRC.split("\n").find(l => l.includes("const usable = all.filter("));
+  ok_("printItems กรองเครื่องที่พิมพ์ผ่านแล้วออก", !!ln);
+  if (ln) {
+    const pick = new Function("all", "alreadyDone", ln.trim() + String.fromCharCode(10) + "return usable;");
+    const A = { id: 1, name: "ครัว" }, B = { id: 2, name: "แคชเชียร์" };
+    ok_("รอบแรกส่งครบทุกเครื่อง", pick([A, B], {}).length === 2);
+    ok_("รอบลองใหม่ ข้ามเครื่องที่ผ่านแล้ว (ไม่พิมพ์ซ้ำ)",
+      pick([A, B], { 2: 1 }).map(p => p.id).join(",") === "1");
+    ok_("ผ่านครบแล้วไม่ส่งอะไรอีก", pick([A, B], { 1: 1, 2: 1 }).length === 0);
+  }
+  ok_("orphan ดูจากเครื่องทั้งหมด ไม่ใช่เฉพาะที่ยังไม่ส่ง",
+    SRC.includes("const orphan = items.filter(it => !all.some(p => printerHandles(p, it)));"));
+  ok_("printItems คืนรายชื่อเครื่องที่ผ่าน", SRC.includes("return { ok: !anyFail, okIds };"));
+  ok_("tick จำเครื่องที่ผ่านไว้ใน state.done", SRC.includes("const done = state.done[dk] || {};"));
+  ok_("ลองใหม่ได้ไม่เกิน 3 ครั้ง แล้วหยุด", SRC.includes("if (n >= 3) {") && SRC.includes("state.tries[dk] = n;"));
+  ok_("สถานะ done/tries ถูกเก็บกวาดตามบิลที่ปิดไป",
+    SRC.includes("Object.keys(state.done)") && SRC.includes("delete state.done[k];"));
+  ok_("orphan ไม่นับเป็นความล้มเหลว (ลองใหม่ก็ไม่หาย)", !SRC.includes("orphan.length === 0"));
+}
 
 console.log("\n" + "=".repeat(52));
 console.log(fail === 0 ? "OK ผ่านทั้งหมด " + pass + " ข้อ" : "FAIL ล้มเหลว " + fail + " ข้อ (ผ่าน " + pass + ")");
