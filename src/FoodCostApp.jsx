@@ -18366,6 +18366,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     return ["ทั้งหมด",...seen.sort(catSorter(catOrderOf(posSettings)))];
   },[menus,bidSale,posSettings]);
   const filtered=useMemo(()=>{
+    const cs=catSorter(catOrderOf(posSettings));
     return menus.filter(m=>{
       if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
       if((m.availability||{})[bidSale]==="hidden")return false;  // ตั้ง "ซ่อน" → ไม่ขึ้นหน้าขาย (ตรงกับหน้าลูกค้า)
@@ -18373,7 +18374,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       if(!c)return false;                                  // ครัวกลางยังไม่ได้จัดหมวด → ไม่ขึ้นในหน้าขาย
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
-    });
+    }).sort((a,b)=>cs(menuCatOf(a),menuCatOf(b)));
   },[menus,selCat,search,bidSale]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   // มีรายการใหม่ที่ยังไม่ได้ส่งพิมพ์ไหม (เทียบกับที่ส่งไปแล้วใน existingOrder) → ใช้เปิด/ปิดปุ่ม "ส่งรายการ"
@@ -19286,12 +19287,15 @@ function CustomerPage({branchId,tableId,token}){
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
   const cats=useMemo(()=>["ทั้งหมด",...[...new Set(menus.map(menuCatOf).filter(Boolean))].sort(catSorter(catOrderOf(posCfg)))],[menus,posCfg]);
-  const filtered=useMemo(()=>menus.filter(m=>{
-    const c=menuCatOf(m);
-    if(!c)return false;                                    // ยังไม่จัดหมวด → ลูกค้าไม่เห็น
-    if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
-    return m.name.toLowerCase().includes(search.toLowerCase());
-  }),[menus,selCat,search,branchId]);
+  const filtered=useMemo(()=>{
+    const cs=catSorter(catOrderOf(posCfg));
+    return menus.filter(m=>{
+      const c=menuCatOf(m);
+      if(!c)return false;                                    // ยังไม่จัดหมวด → ลูกค้าไม่เห็น
+      if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
+      return m.name.toLowerCase().includes(search.toLowerCase());
+    }).sort((a,b)=>cs(menuCatOf(a),menuCatOf(b)));
+  },[menus,selCat,search,branchId,posCfg]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
   // line_uid identifies this cart line for its whole life. Re-sending a cart (lost response,

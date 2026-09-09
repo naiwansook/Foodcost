@@ -893,7 +893,7 @@ const guards = [
     catSortWith({ category_order: "มั่ว" }, ["ยำ", "กาแฟ"]).join("|") === "กาแฟ|ยำ" &&
     catSortWith({}, ["ยำ", "กาแฟ"]).join("|") === "กาแฟ|ยำ"],
   // ทั้งสามจอต้องเรียงด้วยตัวเดียวกัน ไม่งั้นพนักงานจัดแล้วลูกค้าเห็นคนละลำดับ
-  ["ทั้งสามจอใช้ตัวเรียงเดียวกัน", APP.split("catSorter(").length - 1 === 3],
+  ["ทั้งสามจอใช้ตัวเรียงเดียวกัน", APP.split("catSorter(").length - 1 >= 3],
   ["จอสั่งอาหารเรียงตามลำดับที่จัดไว้", APP.includes("seen.sort(catSorter(catOrderOf(posSettings)))")],
   ["หน้าลูกค้าสแกนเรียงตามลำดับเดียวกัน", APP.includes("].sort(catSorter(catOrderOf(posCfg)))")],
   ["จอเมนูทั้งหมดเรียงตามลำดับที่จัดไว้", APP.includes("catSorter(catOrder)(a[0],b[0])")],
@@ -942,6 +942,11 @@ const guards = [
   ["ไม่เรนเดอร์ใหม่ระหว่างลาก (เขียน DOM ตรงๆ)", APP.includes("if(!d.raf)d.raf=requestAnimationFrame(")],
   ["ใบที่จับตามนิ้วไม่มีหน่วง ใบอื่นไถลหลบ", APP.includes('el.style.transition=i===d.from?"none":"transform .18s')],
   ["ปล่อยนิ้วแล้วล้าง transform ทิ้งทั้งหมด", APP.includes('d.chips.forEach(el=>{el.style.transform="";')],
+  // แถบหมวดเรียงตามที่ลากแล้ว แต่ถ้าตัวเมนูใน "ทั้งหมด" ไม่เรียงตาม การลากก็ไม่ได้ผลตามที่ตั้งใจ
+  ["เมนูใน ทั้งหมด จัดกลุ่มตามลำดับหมวด (ทั้งสองฝั่ง)",
+    APP.split(").sort((a,b)=>cs(menuCatOf(a),menuCatOf(b)))").length - 1 === 2],
+  ["ทั้งสองฝั่งอ่านลำดับจากที่เก็บเดียวกัน",
+    APP.includes("const cs=catSorter(catOrderOf(posCfg));") && APP.includes("const cs=catSorter(catOrderOf(posSettings));")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
