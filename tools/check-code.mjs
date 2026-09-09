@@ -15,6 +15,7 @@ const APP = fs.readFileSync("src/FoodCostApp.jsx", "utf8");
 const AGENT = fs.readFileSync("public/print-agent.js", "utf8");
 const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", import.meta.url), "utf8");
 const PUSH = fs.readFileSync(new URL("../api/push.js", import.meta.url), "utf8");
+const VERCEL = JSON.parse(fs.readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
 const BACKUP = fs.readFileSync(new URL("../api/backup.js", import.meta.url), "utf8");
 const WATCHDOG = fs.readFileSync(new URL("../.github/workflows/health-watchdog.yml", import.meta.url), "utf8");
 
@@ -789,6 +790,12 @@ const guards = [
   ["แจ้งเตือนสำรองต้องบอกสาเหตุที่ลงมือแก้ได้", BACKUP.includes("มีตารางใหม่ที่ยังไม่ได้สำรอง")],
   ["แจ้งเตือนพังต้องไม่ทำให้การสำรองพังตาม",
     /alertBackupProblem[\s\S]{0,900}catch \{ \/\* แจ้งไม่ได้/.test(BACKUP)],
+  // ── ฟังก์ชันต้องรันใกล้ร้านและใกล้ฐานข้อมูล ──
+  // ไม่ตั้ง regions = Vercel รันที่ค่าเริ่มต้น iad1 (วอชิงตัน) · ยืนยันจาก header จริง
+  // x-vercel-id: sin1::iad1::... = เข้าที่สิงคโปร์ แต่ไปทำงานที่อเมริกา
+  // ฐานข้อมูลอยู่โซล (ap-northeast-2) ทุกคำสั่งจึงอ้อมโลก และรูปเมนู/ใบครัวก็ช้าตาม
+  ["ฟังก์ชันรันที่สิงคโปร์ ไม่ใช่อเมริกา",
+    Array.isArray(VERCEL.regions) && VERCEL.regions.length === 1 && VERCEL.regions[0] === "sin1"],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
