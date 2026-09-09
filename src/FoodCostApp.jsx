@@ -572,17 +572,13 @@ const api = {
       return (Array.isArray(r2)&&r2.length)?{...r2[0], _noLockCol:true}:null;
     }
   },
+  // ปลดล็อกเฉพาะสถานะ — เก็บ pay_lock ไว้ต่อโดยตั้งใจ
+  // QR พร้อมเพย์ผูกกับ "ยอดเงิน" ไม่ได้ผูกกับโต๊ะ ใบเดิมที่ลูกค้าถืออยู่จึงยังจ่ายได้ถ้ายอดไม่เปลี่ยน
+  // เก็บยอดที่พิมพ์ไปไว้ ระบบจะได้เฝ้าให้ว่ายังตรงอยู่ไหม แล้วเตือนถ้าไม่ตรงแล้ว
   clearPayWaiting: async (id) => {
-    const body = {status:"pending", pay_lock:null, updated_at:new Date().toISOString()};
-    const q = `orders?id=eq.${id}&status=eq.awaiting_payment`;
-    try{
-      const r = await sb(q, {method:"PATCH", body:JSON.stringify(body)});
-      return (Array.isArray(r)&&r.length)?r[0]:null;
-    }catch(e){
-      if(!/column .* does not exist|PGRST204|schema cache/i.test(String((e&&e.message)||e)))throw e;
-      const r2 = await sb(q, {method:"PATCH", body:JSON.stringify({status:"pending",updated_at:new Date().toISOString()})});
-      return (Array.isArray(r2)&&r2.length)?r2[0]:null;
-    }
+    const r = await sb(`orders?id=eq.${id}&status=eq.awaiting_payment`,
+      {method:"PATCH", body:JSON.stringify({status:"pending", updated_at:new Date().toISOString()})});
+    return (Array.isArray(r)&&r.length)?r[0]:null;
   },
   // Atomically APPEND items to a table's OPEN order (create one if none exists),
   // retrying on concurrent writes. Pure-REST compare-and-set: two diners — or a diner
@@ -1520,6 +1516,20 @@ const menuSorter=(catOrder,menuOrder)=>{
 // หารไม่ลงตัวเป็นเรื่องปกติ (฿1000 / 3) เศษสตางค์ต้องไปตกอยู่กับใครสักคน
 // ไม่ใช่หายไปเฉยๆ — ร้านจะเก็บเงินขาดทุกบิลที่หารไม่ลง
 // ให้คนแรกๆ รับเศษไปคนละ 1 สตางค์ (มาตรฐาน POS ทั่วไป)
+// ปัดเศษ "ยอดที่ลูกค้าจ่ายจริง" ให้เป็นจำนวนเต็ม — ร้านเลือกได้ว่าปัดขึ้นหรือปัดลง
+// ปัดที่ยอดสุดท้ายตัวเดียว ไม่ไปยุ่งกับยอดรวม/ส่วนลด/ค่าบริการ/VAT ที่คำนวณไว้แล้ว
+// ส่วนต่างจากการปัดต้องขึ้นเป็นบรรทัดของตัวเองบนใบเสร็จและเก็บลงบิลเสมอ
+// ไม่งั้นตัวเลขบนใบบวกไม่ลง และยอดขายในระบบจะไม่ตรงกับเงินที่รับมาจริง
+// ตัวที่กันทศนิยมลอยคือบรรทัดปัดเป็นสตางค์ก่อน (Math.round(v*100)/100) — สำคัญมาก
+// ไม่มีบรรทัดนั้น 0.1+0.2+318.7 จะได้ 319.00000000000006 แล้วปัดขึ้นกลายเป็น 320 = เก็บเงินเกินทุกบิล
+// ปัดเป็นสตางค์ก่อนแล้วค่านั้นจะเป็น k/100 พอดี จำนวนเต็มจึงลงตัวเป๊ะ ไม่ต้องมีค่าเผื่ออะไรอีก
+const roundModeOf=(cfg)=>{const m=cfg&&cfg.rounding;return (m==="up"||m==="down")?m:"none";};
+const roundBill=(amount,mode)=>{
+  const v=Math.round((+amount||0)*100)/100;   // ปัดเป็นสตางค์ก่อนเสมอ — อย่าเอาออก
+  if(mode==="up")return Math.ceil(v);
+  if(mode==="down")return Math.floor(v);
+  return v;
+};
 const splitEvenly=(total,n)=>{
   const k=Math.max(1,Math.floor(+n||1));
   const cents=Math.round((+total||0)*100);
@@ -17701,6 +17711,8 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
   if(order.promo_amount>0)L.push({l:stripEmoji(order.promo_name||"โปรโมชั่น"),r:"-"+bahtR(order.promo_amount),size:22});
   if(order.service_charge>0)L.push({l:"ค่าบริการ (Service)",r:"+"+bahtR(order.service_charge),size:22});
   if(order.vat>0)L.push({l:`VAT ${order.vat_rate||7}%${order.vat_included?" (รวมในราคา)":""}`,r:(order.vat_included?"":"+")+bahtR(order.vat),size:22});
+  // ปัดเศษต้องเห็นบนใบ ไม่งั้นลูกค้าบวกเลขตามแล้วไม่ตรง และร้านตรวจย้อนหลังไม่ได้ว่าหายไปไหน
+  if(order.round_adj)L.push({l:"ปัดเศษ",r:((+order.round_adj>0)?"+":"")+bahtR(order.round_adj),size:22});
   L.push({l:(paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"),r:bahtR(order.total||0),size:38,bold:true,mb:6});   // เน้นยอดตัวใหญ่
   if(posSettings&&posSettings.vat_enabled&&order.vat_included!==false)L.push({t:"* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว",size:16,align:"center"});
   if(paid){
@@ -18622,7 +18634,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const vatIncluded=posSettings?.vat_included!==false;
   const vatBase=subAfterDisc+sc;
   const vat=round2(vatRate>0?(vatIncluded?vatBase*vatRate/(100+vatRate):vatBase*vatRate/100):0);
-  const total=round2(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat);
+  const rawTotal=round2(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat);
+  // ปัดเศษท้ายบิลตามที่ร้านตั้งไว้ (ไม่ตั้ง = ไม่ปัด เหมือนเดิมทุกอย่าง)
+  const roundMode=roundModeOf(posSettings);
+  const total=roundBill(rawTotal,roundMode);
+  const roundAdj=round2(total-rawTotal);   // ต้องพิมพ์บนใบและเก็บลงบิล ไม่งั้นตัวเลขบวกไม่ลง
   const cashChange=round2(Math.max(0,(+cashRcv||0)-total));
 
   // เดิมเขียนตรงๆ ในตัวคอมโพเนนต์ → ถ้า option_library ว่าง จะได้ [] ก้อนใหม่ทุกเรนเดอร์
@@ -18778,7 +18794,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       subtotal,discount:round2(manualDiscount),total,
       service_charge:sc,service_charge_rate:scRate,vat,vat_rate:vatRate,vat_included:vatIncluded,
       subtotal_after_disc:subAfterDisc,
-      promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,
+      promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,round_adj:roundAdj,
       cash_received:null},table.table_number,false);   // false = ยังไม่ชำระ → ใบมี QR ท้ายใบ
     if(!existingOrder?.id)return;
     // ล็อกยอดกับสถานะไว้ที่ตัวบิล: โต๊ะเปลี่ยนสี · ลูกค้าสั่งเพิ่มไม่ได้ · ส่วนลดไม่ขยับ
@@ -18800,12 +18816,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // ปลดล็อกกลับไปแก้ส่วนลด/พิมพ์ QR ใหม่ — กดพิมพ์ผิดโต๊ะแล้วต้องมีทางออก ไม่ใช่ค้างอยู่อย่างนั้น
   async function unlockPayWait(){
     if(!existingOrder?.id)return;
-    if(!await confirmDlg({title:"ปลดล็อกรอชำระเงิน?",message:"โต๊ะจะกลับไปสถานะปกติ ลูกค้าสั่งเพิ่มได้อีกครั้ง และแก้ส่วนลดได้\nQR ที่พิมพ์ไปแล้วจะใช้ไม่ได้ ต้องพิมพ์ใหม่",confirmLabel:"ปลดล็อก",cancelLabel:"ไม่ปลด"}))return;
+    if(!await confirmDlg({title:"ยกเลิกการรอชำระเงิน?",message:"โต๊ะกลับไปสถานะปกติ · ลูกค้าสั่งเพิ่มได้อีกครั้ง · แก้ส่วนลดได้\n\n✅ QR ใบเดิมที่ลูกค้าถืออยู่ยังใช้จ่ายได้ ไม่ต้องพิมพ์ใหม่\n(QR พร้อมเพย์ผูกกับยอดเงิน ไม่ได้ผูกกับโต๊ะ) — ยกเว้นถ้ายอดเปลี่ยน ระบบจะเตือนให้เอง",confirmLabel:"ยกเลิกการรอชำระ",cancelLabel:"ไม่ยกเลิก"}))return;
     try{
       const row=await api.clearPayWaiting(existingOrder.id);
       if(row)verRef.current=row.updated_at;
-      setPayWait(false);setLockedTotal(null);
-      posToast("ปลดล็อกแล้ว — แก้ส่วนลดได้ และต้องพิมพ์ QR ใหม่ถ้าจะให้ลูกค้าโอน","ok");
+      setPayWait(false);   // คง lockedTotal ไว้ ระบบจะได้เฝ้าว่า QR ใบเดิมยังใช้ยอดนี้อยู่ไหม
+      posToast("ยกเลิกการรอชำระแล้ว — QR ใบเดิมยังใช้ได้ถ้ายอดไม่เปลี่ยน","ok");
       onDone&&onDone();
     }catch(e){alert("ปลดล็อกไม่สำเร็จ: "+friendlyError(e));}
   }
@@ -18875,7 +18891,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const promoMeta=selectedPromo?{promo_id:selectedPromo.id,promo_name:selectedPromo.name,promo_amount:promoDiscount}:{};
       // Base fields (always exist) + full breakdown (needs the migration). If the
       // breakdown columns aren't there yet, fall back to base so the sale never fails.
-      const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()};
+      const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:payMethod,updated_at:new Date().toISOString()};
       // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
       const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,paid_by:currentUser?.username||currentUser?.name||null};
       let row;
@@ -19200,10 +19216,18 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           <div style={{fontSize:13,fontWeight:900,color:C.purple}}>🔒 รอลูกค้าโอน — ยอดถูกล็อกไว้แล้ว</div>
           <div style={{fontSize:11.5,color:C.purple,marginTop:3,lineHeight:1.6,opacity:.95}}>
             ส่วนลดและโปรโมชั่นแก้ไม่ได้ เพื่อให้ตรงกับยอดบน QR ที่ลูกค้าถืออยู่ · กด <b>ยืนยันชำระ</b> ได้เลยเมื่อเงินเข้า
-            {lockedTotal!=null&&Math.abs((+total||0)-(+lockedTotal||0))>0.009&&<><br/>
-              <b style={{color:C.red}}>⚠️ ยอดตอนนี้ ฿{(+total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} ไม่ตรงกับยอดบน QR ฿{(+lockedTotal||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — รายการถูกแก้หลังพิมพ์ QR ต้องพิมพ์ QR ใหม่</b></>}
           </div>
-          {onUnlockPay&&<button onClick={onUnlockPay} style={{marginTop:7,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.purple}55`,background:C.white,color:C.purple,cursor:"pointer",fontSize:11.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>ปลดล็อก เพื่อแก้ส่วนลด / พิมพ์ QR ใหม่</button>}
+        </div>}
+        {/* QR ที่พิมพ์ไปแล้วยังตรงกับยอดตอนนี้ไหม — เตือนทั้งตอนล็อกและตอนปลดล็อกแล้ว
+            เพราะลูกค้ายังถือใบเดิมอยู่ ยอดขยับเมื่อไหร่ใบนั้นก็จ่ายผิดทันที */}
+        {lockedTotal!=null&&Math.abs((+total||0)-(+lockedTotal||0))>0.009&&<div style={{marginBottom:12,padding:"11px 13px",borderRadius:11,background:C.redLight,border:`1px solid ${C.red}55`,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{fontSize:13,fontWeight:900,color:C.red}}>⚠️ ยอดไม่ตรงกับ QR ที่พิมพ์ไปแล้ว</div>
+          <div style={{fontSize:11.5,color:C.red,marginTop:3,lineHeight:1.6}}>
+            บน QR ฿{(+lockedTotal||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} · ตอนนี้ ฿{(+total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — รายการถูกแก้หลังพิมพ์ QR <b>ต้องพิมพ์ QR ใหม่</b>
+          </div>
+        </div>}
+        {lockedTotal!=null&&!payWait&&Math.abs((+total||0)-(+lockedTotal||0))<=0.009&&<div style={{marginBottom:12,padding:"9px 13px",borderRadius:11,background:C.greenLight,border:`1px solid ${C.green}44`,fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:"#0F6E4C",lineHeight:1.6}}>
+          ✅ QR ใบที่พิมพ์ไปแล้ว (฿{(+lockedTotal||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}) ยังใช้จ่ายได้ ยอดยังตรงกันอยู่
         </div>}
         <div style={{opacity:payWait?.45:1,pointerEvents:payWait?"none":"auto"}}>
         {applicablePromos.length>0&&<><div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🎁 โปรโมชั่นที่เข้าเงื่อนไข ({applicablePromos.length})</div>
@@ -19269,11 +19293,14 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
             <Ic d={I.trash} s={13} c={C.red}/>ยกเลิกบิล
           </button>
         </div>
-        <div style={{display:"flex",gap:10,alignItems:"stretch"}}>
+        {/* กดพิมพ์ผิดโต๊ะต้องยกเลิกได้ตรงนี้เลย ไม่ต้องไปหาที่อื่น — ปุ่มอยู่ข้างกันกับปุ่มพิมพ์ */}
+        <div style={{display:"flex",gap:10,alignItems:"stretch",flexWrap:"wrap"}}>
+          {payWait&&onUnlockPay&&<Btn v="ghost" onClick={onUnlockPay}
+            s={{flex:"1 1 30%",minWidth:120,padding:"15px 10px",fontSize:14,fontWeight:900,lineHeight:1.25,color:C.purple,borderColor:`${C.purple}66`}}>↩︎ ยกเลิกรอชำระ</Btn>}
           <Btn v="primary" onClick={onPrintQR} icon={I.print}
-            s={{flex:"1 1 44%",padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>{payWait?"พิมพ์ QR ซ้ำ":"พิมพ์ QR จ่ายเงิน"}</Btn>
+            s={{flex:payWait?"1 1 30%":"1 1 44%",minWidth:120,padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>{payWait?"พิมพ์ QR ซ้ำ":"พิมพ์ QR จ่ายเงิน"}</Btn>
           <Btn v="success" onClick={onPay} loading={saving} icon={I.check}
-            s={{flex:"1 1 56%",padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>✅ ยืนยันชำระ & พิมพ์ใบเสร็จ</Btn>
+            s={{flex:payWait?"1 1 36%":"1 1 56%",minWidth:150,padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>✅ ยืนยันชำระ & พิมพ์ใบเสร็จ</Btn>
         </div>
       </div>
     </div>
@@ -19468,9 +19495,11 @@ function CustomerPage({branchId,tableId,token}){
     const vatIncluded=!posCfg||posCfg.vat_included!==false;
     const vatBase=base+sc;
     const vat=vatRate>0?Math.round(vatIncluded?vatBase*vatRate/(100+vatRate)*100:vatBase*vatRate)/100:0;
-    const due=vatIncluded?base+sc:base+sc+vat;
-    return {scRate,sc,vatRate,vat,vatIncluded,
-      due:(myOrder&&myOrder.status==="paid")?(+myOrder.total||0):Math.round(due*100)/100};
+    const rawDue=Math.round((vatIncluded?base+sc:base+sc+vat)*100)/100;
+    // ปัดเศษแบบเดียวกับจอพนักงาน — ยอดที่ลูกค้าเห็นต้องตรงกับยอดที่ต้องจ่ายจริงเป๊ะ
+    const due=roundBill(rawDue,roundModeOf(posCfg));
+    return {scRate,sc,vatRate,vat,vatIncluded,roundAdj:Math.round((due-rawDue)*100)/100,
+      due:(myOrder&&myOrder.status==="paid")?(+myOrder.total||0):due};
   },[myOrder,posCfg]);
   const[gateLoading,setGateLoading]=useState(true);
   async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);
@@ -20405,6 +20434,28 @@ function POSSettingsFields({s:settings,set}){
       </div>}
     </Card>
 
+    {/* ปัดเศษท้ายบิล */}
+    <Card style={{padding:18,marginBottom:14}}>
+      <div style={{marginBottom:10}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink}}>🪙 ปัดเศษท้ายบิล</div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>ปัดยอดที่ลูกค้าจ่ายให้เป็นจำนวนเต็ม ไม่มีทศนิยม</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+        {[{v:"none",l:"ไม่ปัด",d:"เก็บตามจริง"},{v:"up",l:"ปัดขึ้น",d:"319.20 → 320"},{v:"down",l:"ปัดลง",d:"319.80 → 319"}].map(o=>{
+          const on=(settings.rounding||"none")===o.v;
+          return <button key={o.v} onClick={()=>set('rounding',o.v)} style={{padding:"11px 8px",borderRadius:11,cursor:"pointer",
+            border:`2px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,fontFamily:"'Sarabun',sans-serif",
+            display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+            <span style={{fontSize:14,fontWeight:900,color:on?C.brand:C.ink2}}>{o.l}</span>
+            <span style={{fontSize:10.5,color:C.ink4}}>{o.d}</span>
+          </button>;
+        })}
+      </div>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:9,lineHeight:1.6}}>
+        ปัดเฉพาะ<b>ยอดสุดท้ายที่ลูกค้าจ่าย</b> — ยอดรวม ส่วนลด ค่าบริการ และ VAT ยังเป็นตัวเลขจริงเหมือนเดิม
+        ส่วนต่างจากการปัดจะขึ้นเป็นบรรทัด "ปัดเศษ" บนใบเสร็จและถูกบันทึกไว้กับบิล ตรวจย้อนหลังได้
+      </div>
+    </Card>
     {/* Service Charge */}
     <Card style={{padding:18,marginBottom:14}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
