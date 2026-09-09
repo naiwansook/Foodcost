@@ -59,11 +59,30 @@ function dbhCanAlert(kind){
     return true;
   }catch{ return false; }   // โหมดส่วนตัวเขียนไม่ได้ → ไม่ยิง ดีกว่ายิงรัว
 }
-function dbhAlert(kind){
+// ยิงคำขอที่เล็กที่สุดเท่าที่จะเล็กได้ เพื่อวัดเส้นทางล้วนๆ โดยไม่มีข้อมูลมาถ่วง
+async function dbhProbe(){
+  const t0=nowMs();
+  try{
+    const r=await fetch(`${SUPA_URL}/rest/v1/branches?select=id&limit=1`,
+      {headers:{apikey:SUPA_KEY,Authorization:`Bearer ${SUPA_KEY}`},cache:"no-store"});
+    await r.text();
+    return { ms:Math.round(nowMs()-t0), ok:r.ok };
+  }catch{ return { ms:Math.round(nowMs()-t0), ok:false }; }
+}
+async function dbhAlert(kind){
   if(!dbhCanAlert(kind))return;
-  const msg = kind==="down"
-    ? { title:"⚠️ ฐานข้อมูลเริ่มตอบช้า", body:`ระบบยังใช้งานได้แต่ช้ากว่าปกติ (${Math.round(DBH.lastMs)} มิลลิวินาที) — ถ้ามีการนับสต๊อกอยู่ควรเลื่อนออกไปก่อน` }
-    : { title:"✅ ฐานข้อมูลกลับมาปกติ",  body:"ความเร็วกลับมาปกติแล้ว ใช้งานได้ตามปกติ" };
+  let msg;
+  if(kind!=="down"){
+    msg = { title:"✅ ระบบกลับมาปกติ", body:"ความเร็วกลับมาปกติแล้ว ใช้งานได้ตามปกติ" };
+  }else{
+    const slowSec = Math.round(DBH.lastMs/100)/10;
+    const p = await dbhProbe();
+    // คำขอจิ๋วยังเร็ว = ปลายทางปกติ · ช้าทั้งคู่ = เน็ตหรือปลายทางจริงๆ · ยิงไม่ออก = ล่ม
+    const where = !p.ok            ? "ต่อฐานข้อมูลไม่ได้เลย — น่าจะล่มจริง ตรวจ Supabase ทันที"
+                : p.ms > 3000      ? `คำขอจิ๋วก็ช้า (${p.ms} ms) — เน็ตของสาขาหรือฐานข้อมูลช้าจริง`
+                :                    `แต่คำขอจิ๋วเร็วปกติ (${p.ms} ms) — ฐานข้อมูลไม่ได้ช้า ปัญหาอยู่ที่เครื่องนี้ (เช็กสัญญาณ wifi และโหมดประหยัดแบต)`;
+    msg = { title:"⚠️ ระบบตอบช้า", body:`คำสั่งใช้เวลา ${slowSec} วินาที ${where}` };
+  }
   // ยิงผ่าน Vercel (คนละเครื่องกับฐานข้อมูล) จึงยังส่งได้ตอนฐานข้อมูลเริ่มป่วย
   try{ fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({...msg, scope:"admin", url:"/"}),keepalive:true}); }catch{}
