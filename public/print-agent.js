@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 32;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 33;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -391,15 +391,36 @@ async function handleQRRequests(printers) {
 
 // พิมพ์รูปภาพ (raster ESC/POS ที่แอปเรนเดอร์ไทยคมชัดมาให้แล้ว) ตามคำสั่ง: description.pj = {at, b64}
 function pjOf(p) { try { const j = JSON.parse(p.description || "{}").pj; return (j && j.at && j.b64) ? j : null; } catch { return null; } }
+// ลบงานพิมพ์ที่จัดการเสร็จแล้วออกจากแถว — อ่านของสดก่อนเขียนเสมอ เพื่อไม่ทับคำสั่งอื่น
+// ลบเฉพาะงานที่มี at ตรงกับที่เราเพิ่งจัดการ ถ้าแอปเพิ่งส่งงานใหม่เข้ามาคาบเกี่ยว จะไม่ไปลบของใหม่ทิ้ง
+async function clearPJ(id, at) {
+  try {
+    const r = await sb(`printers?id=eq.${id}&select=description`);
+    let d = {};
+    try { d = JSON.parse((r && r[0] && r[0].description) || "{}"); } catch { return; }
+    if (!d.pj || String(d.pj.at) !== String(at)) return;   // ไม่ใช่งานเดิม = มีคนส่งงานใหม่มาแล้ว ปล่อยไว้
+    delete d.pj;
+    await patchPrinter(id, { description: JSON.stringify(d) });
+    console.log(`  🧹 ล้างงานพิมพ์ที่เสร็จแล้วออกจากแถว #${id}`);
+  } catch { /* ล้างไม่สำเร็จก็ไม่เป็นไร รอบหน้าลองใหม่ */ }
+}
+
 async function handlePJRequests(printers) {
   for (const p of printers) {
     if (isBluetooth(p) || !p.ip) continue;
     const j = pjOf(p);
-    if (j && String(state.printed[p.id]) !== String(j.at)) {
+    if (!j) continue;
+    if (String(state.printed[p.id]) !== String(j.at)) {
       state.printed[p.id] = j.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
       try { await sendToPrinter(p.ip, p.port, Buffer.from(j.b64, "base64")); console.log(`  🖼️ พิมพ์รูปภาพ (ไทยคมชัด) → ${p.name} (${p.ip})`); }
       catch (e) { console.log(`  ❌ พิมพ์รูปภาพ → ${p.name} (${p.ip}): ${e.message}`); }
     }
+    // งานพิมพ์เป็นคำสั่งครั้งเดียวจบ — พิมพ์แล้ว (หรือพยายามแล้ว) ต้องลบทิ้งทันที
+    // ปล่อยค้างไว้คือรูปใบเสร็จ base64 ~24KB นอนอยู่ในแถว แล้วถูกอ่านซ้ำทุก 5 วินาที
+    // ตลอด 24 ชม. (getPrinters ดึงทุกคอลัมน์) และถูกเขียนกลับทั้งก้อนทุก 45 วินาที
+    // (heartbeat merge ทั้ง description) — นี่คือสิ่งที่ทำให้ Disk IO หมดจนฐานข้อมูลล่ม 9 ก.ย. 69
+    // ไม่ลองพิมพ์ใหม่อยู่แล้วตามกติกา (ล้มเหลว = แจ้งเตือนที่โต๊ะ) การลบจึงไม่ทำให้ใบหาย
+    await clearPJ(p.id, j.at);
   }
 }
 

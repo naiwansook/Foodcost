@@ -331,6 +331,56 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("ไฟล์พัง = prime ใหม่ (บันทึกว่าเห็นแล้ว ไม่พิมพ์)", primedOf(false) === false);
 }
 
+// ── ล้างงานพิมพ์ที่เสร็จแล้วออกจากแถว (แก้เหตุ Disk IO หมด 9 ก.ย. 69) ──
+// รูปใบเสร็จ base64 ~24KB ถูกฝากไว้ใน printers.description ให้ตัวพิมพ์มาอ่าน
+// แต่ไม่เคยมีใครลบทิ้ง → ถูกอ่านซ้ำทุก 5 วิ และเขียนกลับทั้งก้อนทุก 45 วิ ตลอด 24 ชม.
+// ดึง clearPJ ตัวจริงมารันกับ sb/patchPrinter ปลอม แล้วดูว่ามันแตะอะไรบ้าง
+{
+  const src = grabBetween("async function clearPJ(", "async function handlePJRequests(");
+  let stored = null, patched = null;
+  const mk = (desc) => {
+    stored = desc;
+    const sb = async () => [{ description: stored }];
+    const patchPrinter = async (id, d) => { patched = { id, ...d }; stored = d.description; };
+    return new Function("sb", "patchPrinter", src + " return clearPJ;")(sb, patchPrinter);
+  };
+
+  // งานตรงกับที่เพิ่งพิมพ์ → ต้องลบ pj และเก็บคีย์อื่นไว้ครบ
+  patched = null;
+  let clearPJ = mk(JSON.stringify({ on: 1, onAt: 111, rcpt: 1, agentSeen: 222, pj: { at: 999, b64: "x".repeat(24000) } }));
+  await clearPJ(10, 999);
+  const after = JSON.parse(stored);
+  ok_("พิมพ์เสร็จแล้ว → ลบงานพิมพ์ออกจากแถว", patched !== null && after.pj === undefined);
+  ok_("ลบงานพิมพ์แล้วคีย์อื่นต้องอยู่ครบ",
+    after.on === 1 && after.onAt === 111 && after.rcpt === 1 && after.agentSeen === 222);
+  ok_("แถวเล็กลงจริง (ไม่ใช่แค่ตั้งเป็นค่าว่าง)", stored.length < 200 && !stored.includes("xxxx"));
+
+  // มีงานใหม่เข้ามาคาบเกี่ยว → ห้ามลบของใหม่ทิ้ง ไม่งั้นใบครัวหายเงียบ
+  patched = null;
+  clearPJ = mk(JSON.stringify({ on: 1, pj: { at: 1000, b64: "ใหม่" } }));
+  await clearPJ(10, 999);
+  ok_("งานใหม่เข้ามาระหว่างนั้น → ต้องไม่ลบทิ้ง", patched === null && JSON.parse(stored).pj.at === 1000);
+
+  // ไม่มีงานค้างอยู่แล้ว → ไม่ต้องเขียนอะไรเลย (อย่าเขียนฟรี)
+  patched = null;
+  clearPJ = mk(JSON.stringify({ on: 1, onAt: 5 }));
+  await clearPJ(10, 999);
+  ok_("ไม่มีงานค้าง → ไม่เขียนอะไรเลย", patched === null);
+
+  // description พังอ่านไม่ออก → ต้องเงียบ ไม่ใช่ทำตัวพิมพ์ตาย
+  patched = null;
+  let threw = false;
+  clearPJ = mk("{ไม่ใช่ JSON");
+  try { await clearPJ(10, 999); } catch { threw = true; }
+  ok_("description อ่านไม่ออก → ไม่ล้มทั้งตัวพิมพ์", !threw && patched === null);
+
+  // ต้องถูกเรียกจริงจากขั้นตอนพิมพ์ ไม่ใช่เขียนฟังก์ชันทิ้งไว้เฉยๆ
+  ok_("ขั้นตอนพิมพ์เรียกตัวล้างจริง", /await clearPJ\(p\.id, j\.at\);/.test(SRC));
+  // ต้องล้างแม้รอบนี้ไม่ได้พิมพ์ (ของค้างจากเมื่อวานต้องหายด้วย)
+  ok_("ของค้างเก่าที่พิมพ์ไปแล้วก็ต้องถูกล้าง",
+    SRC.includes("if (!j) continue;") && !/if \(j && String\(state\.printed/.test(SRC));
+}
+
 console.log("\n" + "=".repeat(52));
 console.log(fail === 0 ? "OK ผ่านทั้งหมด " + pass + " ข้อ" : "FAIL ล้มเหลว " + fail + " ข้อ (ผ่าน " + pass + ")");
 process.exitCode = fail ? 1 : 0;
