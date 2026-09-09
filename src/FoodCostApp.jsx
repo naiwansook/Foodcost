@@ -19461,7 +19461,9 @@ function CustomerPage({branchId,tableId,token}){
     </div>
   </div>;
   const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+i.qty,0):0;
-  return <div style={{minHeight:"100vh",background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
+  // .cust-shell ให้ความสูงแบบ 100dvh (ดู index.html) — ต้องเป็นความสูง "ที่แน่นอน" ไม่ใช่ min-height
+  // ไม่งั้นกล่องรายการเมนูข้างในจะยืดตามเนื้อหาแทนที่จะเลื่อน แล้วลูกค้าเลื่อนดูเมนูไม่ได้
+  return <div className="cust-shell" style={{background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
     {/* Order stuck in the outbox — the diner must know it is NOT lost and that we keep retrying. */}
     {outbox&&<div style={{background:"#FEF3C7",borderBottom:"2px solid #F59E0B",padding:"10px 14px",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
       <div style={{fontSize:13.5,fontWeight:800,color:"#92400E",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -19492,7 +19494,7 @@ function CustomerPage({branchId,tableId,token}){
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
-      <div style={{flex:1,overflowY:"auto",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,alignContent:"start"}}>
+      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,alignContent:"start"}}>
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
             {m.image?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
@@ -19522,7 +19524,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
     </>}
     {step==="myorder"&&<>
-      <div style={{flex:1,overflowY:"auto",padding:12}}>
+      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:12}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
           <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,margin:0}}>📋 สรุปยอดของฉัน</h3>
           <button onClick={loadMyOrder} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600}}>🔄 รีเฟรช</button>
@@ -19573,7 +19575,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
     </>}
     {step==="cart"&&<>
-      <div style={{flex:1,overflowY:"auto",padding:10}}>
+      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:10}}>
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:10}}>รายการที่สั่ง</h3>
         {cart.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:8}}>
           <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📝 {item.note}</div>}{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
