@@ -20800,6 +20800,10 @@ function POSMenuAvailManager({currentBranch,onClose}){
   // ห่อ useCallback ไว้เพราะส่งเข้าไปในการ์ดที่ครอบ memo — ถ้าเปลี่ยนตัวทุกเรนเดอร์ memo จะไม่ทำงานเลย
   const beginMHold=useCallback((e,id)=>{
     if(e.pointerType==="mouse"&&e.button!==0)return;
+    // จับได้ทีละนิ้วเท่านั้น — นิ้วที่สองที่กดค้างระหว่างลากอยู่จะไปทับข้อมูลการลากของนิ้วแรก
+    // ทำให้การ์ดใบแรกค้างเงาลอยไว้ถาวรและมีวงวนวาดภาพสองชุดพร้อมกัน
+    if(mHoldRef.current||mDragRef.current)return;
+    const pid=e.pointerId;
     const sx=e.clientX,sy=e.clientY;
     const el=e.currentTarget;
     const cancel=(ev)=>{if(Math.abs(ev.clientX-sx)>8||Math.abs(ev.clientY-sy)>8)clear();};
@@ -20828,25 +20832,30 @@ function POSMenuAvailManager({currentBranch,onClose}){
         cards[i].style.transition=i===from?"none":"transform .18s cubic-bezier(.2,.7,.3,1)";
       }
       cards[from].style.zIndex="5";cards[from].style.boxShadow="0 14px 30px rgba(15,23,42,.3)";
-      mDragRef.current={from,to:from,ids,cards,rects,lo,hi,sx,sy,px:sx,py:sy,dx:0,dy:0,box,raf:0};
+      mDragRef.current={pid,from,to:from,ids,cards,rects,lo,hi,sx,sy,px:sx,py:sy,dx:0,dy:0,box,raf:0};
       setMDrag(true);
       paintM(true);
       mDragRef.current.raf=requestAnimationFrame(tickM);
     },MHOLD_MS);
   },[]);
   function moveMDrag(e){
-    const d=mDragRef.current;if(!d)return;
+    const d=mDragRef.current;if(!d||e.pointerId!==d.pid)return;   // นิ้ว/ฝ่ามือที่ไถผ่านต้องไม่ไปย้ายเป้าหมายของนิ้วที่จับอยู่
     e.preventDefault();
     d.px=e.clientX;d.py=e.clientY;   // งานจริงทำใน tickM รอบเดียวต่อเฟรม ไม่ทำต่อ event
   }
-  async function endMDrag(){
-    const d=mDragRef.current;mDragRef.current=null;
+  function endMDrag(e){ return finishMDrag(e,true); }
+  // ระบบยกเลิกท่าทางให้เอง (สายเรียกเข้า สลับแอป ฯลฯ) = "ยังไม่ได้ปล่อยตรงนั้น" ต้องคืนที่เดิม
+  function cancelMDrag(e){ return finishMDrag(e,false); }
+  async function finishMDrag(e,commit){
+    const d=mDragRef.current;
     if(!d)return;
+    if(e&&e.pointerId!=null&&e.pointerId!==d.pid)return;   // ปล่อยนิ้วอื่น ไม่ใช่นิ้วที่จับการ์ดอยู่
+    mDragRef.current=null;
     if(d.raf)cancelAnimationFrame(d.raf);
     for(let i=d.lo;i<=d.hi;i++){const el=d.cards[i];el.style.transform="";el.style.transition="";el.style.willChange="";}
     d.cards[d.from].style.zIndex="";d.cards[d.from].style.boxShadow="";
     setMDrag(false);
-    if(d.to===d.from)return;
+    if(!commit||d.to===d.from)return;
     // ลำดับที่บันทึกต้องครอบคลุมเมนูทั้งหมดของสาขา ไม่ใช่เฉพาะที่กำลังกรองอยู่บนจอ
     // ไม่งั้นพอล้างคำค้นหา เมนูที่ไม่ได้อยู่ในผลค้นหาจะหลุดลำดับไปกองท้ายทันที
     const st=stRef.current;
@@ -20936,7 +20945,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
           👆 กดค้างที่การ์ดเมนูแล้วลากเพื่อจัดลำดับ (สลับได้ภายในหมวดเดียวกัน) · เมนูที่อยู่ก่อน ลูกค้าเห็นก่อน
         </div>
-        <div ref={gridRef} onPointerMove={moveMDrag} onPointerUp={endMDrag} onPointerCancel={endMDrag}
+        <div ref={gridRef} onPointerMove={moveMDrag} onPointerUp={endMDrag} onPointerCancel={cancelMDrag}
           style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gridAutoRows:"max-content",gap:10,alignContent:"start",
           maxHeight:"58vh",overflowY:mDrag?"hidden":"auto",overflowX:"hidden",padding:"2px 2px 8px",
           touchAction:mDrag?"none":"pan-y"}}>

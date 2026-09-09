@@ -1041,6 +1041,15 @@ section("จอเมนูทั้งหมด: ตารางการ์ด
   ok_("กดปุ่มบนการ์ดต้องไม่กลายเป็นการลาก", APP.split("onPointerDown={(e)=>e.stopPropagation()}").length - 1 >= 2);
   ok_("iOS: กันจอเลื่อนด้วย touchmove ไม่ใช่ touch-action (เปลี่ยนกลางท่าทางไม่มีผล)",
     APP.includes("},[mDrag]);"));
+  // ── หลายนิ้วบนจอเดียว (ไอแพดที่ร้านวางมือทับจอตลอด) ──
+  // ตอนแรกตัวลากไม่ดูเลยว่า event มาจากนิ้วไหน: ฝ่ามือที่แตะแล้วยกขึ้น ก็จบการลางของนิ้วจริง
+  // แล้ว "บันทึก" ตำแหน่งกลางคันลงฐานข้อมูลเลย ทั้งที่คนยังไม่ได้ปล่อย
+  ok_("รับเฉพาะนิ้วที่จับการ์ดอยู่ ไม่ใช่นิ้วไหนก็ได้",
+    APP.includes("if(!d||e.pointerId!==d.pid)return;") && APP.includes("if(e&&e.pointerId!=null&&e.pointerId!==d.pid)return;")),
+  ok_("จับได้ทีละนิ้ว นิ้วที่สองไม่ไปทับการลากที่ค้างอยู่", APP.includes("if(mHoldRef.current||mDragRef.current)return;")),
+  // ระบบยกเลิกท่าทางให้ = ยังไม่ได้ปล่อยตรงนั้น ถ้าไปบันทึกคือย้ายเมนูให้เองโดยไม่มีใครสั่ง
+  ok_("ระบบยกเลิกท่าทางแล้วต้องคืนที่เดิม ไม่ใช่บันทึก",
+    APP.includes("onPointerCancel={cancelMDrag}") && APP.includes("function cancelMDrag(e){ return finishMDrag(e,false); }")),
   ok_("บันทึกลำดับไม่สำเร็จต้องคืนลำดับเดิม", APP.includes("      setMenuOrder(st.menuOrder);"));
   // คอลัมน์ menu_order เป็นของใหม่ — ก่อนรัน SQL ต้องบอกเป็นภาษาคน ไม่ใช่โยนข้อความดิบใส่หน้าเจ้าของ
   ok_("ยังไม่ได้รัน SQL ต้องบอกเป็นภาษาคน", APP.includes("ต้องรัน SQL เพิ่มคอลัมน์ menu_order ครั้งเดียว"));
