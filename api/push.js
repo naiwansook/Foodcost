@@ -60,12 +60,19 @@ export default async function handler(req, res) {
       subs = SUBS_CACHE.rows; staleList = true;
     }
     // notify subscribers whose scope is "all" (allowed_branches null) or includes this branch
-    const targets = (subs || []).filter(s => {
+    const pick = (strictAdmin) => (subs || []).filter(s => {
       const ab = s.allowed_branches;
       if (ab == null) return true;
-      if (adminOnly) return false;
+      if (strictAdmin) return false;
       try { const arr = Array.isArray(ab) ? ab : JSON.parse(ab); return arr.map(Number).includes(branchId); } catch { return true; }
     });
+    let targets = pick(adminOnly);
+    // ⚠️ ห้ามให้การเตือนเรื่องระบบล่มจบลงที่ "ผู้รับ 0 คน" อย่างเงียบๆ
+    // 9 ก.ย. 69: ระบบล่มทั้งวัน ตัวเฝ้าจับได้ตั้งแต่ 07:42 และยิงเข้ามาที่นี่จริง
+    // แต่ผู้ติดตามทั้ง 2 คนผูกกับสาขา ตัวกรอง admin จึงคัดออกหมด = ไม่มีใครได้รับอะไรเลย
+    // เจ้าของรู้อีกทีตอนพนักงานเปิดร้านไม่ได้ · เตือนถึงคนผิดกลุ่ม ยังดีกว่าไม่ถึงใครเลย
+    let widened = false;
+    if (adminOnly && targets.length === 0) { targets = subs || []; widened = targets.length > 0; }
     // Default text is the order-approval alert the two original callers rely on; a caller
     // may override all three fields (health alerts do). Kept as an override rather than a
     // separate endpoint because the Vercel plan caps this project at 12 functions.
@@ -87,7 +94,7 @@ export default async function handler(req, res) {
         }
       }
     }));
-    return res.status(200).json({ ok: true, targets: targets.length, sent, removed, staleList });
+    return res.status(200).json({ ok: true, targets: targets.length, sent, removed, staleList, widened });
   } catch (e) {
     return res.status(500).json({ error: String((e && e.message) || e) });
   }

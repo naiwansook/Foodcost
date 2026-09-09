@@ -88,6 +88,33 @@ jobs:
           fi
           echo "✅ ปกติ"
 
+      # ── ช่องแจ้งเตือนที่ไม่พึ่งอะไรของเราเลย ─────────────────────────────
+      # 9 ก.ย. 69 ระบบล่มทั้งเช้า ตัวเฝ้าจับได้ตั้งแต่ 07:42 และยิงเข้า /api/push จริง
+      # แต่ไม่มีใครได้รับอะไรเลย เพราะปลายทางนั้นต้องอ่านรายชื่อผู้รับจากฐานข้อมูลที่
+      # กำลังตายอยู่ จึงตอบ 500 — แจ้งเตือนที่พึ่งพาสิ่งที่มันกำลังจะเตือนว่าพัง
+      # คือแจ้งเตือนที่ใช้ไม่ได้ในวันที่ต้องใช้จริง
+      # ตัวนี้ยิงจาก GitHub ตรงเข้า LINE ไม่แตะ Supabase ไม่แตะ Vercel — ดับหมดก็ยังส่งได้
+      # ยังไม่ได้ตั้ง secret ก็ข้ามไปเงียบๆ ไม่ทำให้ขั้นตอนอื่นล้ม
+      - name: แจ้งเตือนเข้า LINE (ไม่พึ่งฐานข้อมูลและ Vercel)
+        if: failure()
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.LINE_ALERT_TOKEN }}
+          TO: ${{ secrets.LINE_ALERT_TO }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$TO" ]; then
+            echo "ยังไม่ได้ตั้ง LINE_ALERT_TOKEN / LINE_ALERT_TO — ข้ามช่องนี้"
+            echo "ตั้งได้ที่ Settings → Secrets and variables → Actions"
+            exit 0
+          fi
+          WHEN=$(TZ=Asia/Bangkok date "+%d/%m %H:%M")
+          TEXT=$(printf '🔴 NAIWANSOOK ระบบใช้งานไม่ได้\nตัวเฝ้าระวังภายนอกยิงเข้าฐานข้อมูลไม่ผ่าน 3 ครั้งติด\nเวลา %s\nตรวจที่ Supabase: Disk IO / โควตา / สถานะโปรเจกต์' "$WHEN")
+          BODY=$(jq -n --arg to "$TO" --arg text "$TEXT" '{to:$to,messages:[{type:"text",text:$text}]}')
+          CODE=$(curl -s -o /tmp/line.out -w "%{http_code}" -m 20 -X POST https://api.line.me/v2/bot/message/push \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data "$BODY")
+          echo "ส่ง LINE: HTTP $CODE"
+          [ "$CODE" = "200" ] || { echo "LINE ตอบกลับ:"; cat /tmp/line.out; }
+
       # อีเมลจาก GitHub ไปถึงช้ากว่าการแจ้งเตือนบนมือถือมาก จึงยิงเข้ามือถือด้วย
       # (ทำเฉพาะเมื่อขั้นก่อนล้ม) ไม่ต้องใช้ secret — ปลายทางเดียวกับที่แอปใช้อยู่
       # ถ้าฐานข้อมูลตายสนิท ปลายทางจะใช้รายชื่อผู้รับที่แคชไว้ ถ้ามี

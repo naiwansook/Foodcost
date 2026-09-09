@@ -14,6 +14,9 @@ import fs from "node:fs";
 const APP = fs.readFileSync("src/FoodCostApp.jsx", "utf8");
 const AGENT = fs.readFileSync("public/print-agent.js", "utf8");
 const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", import.meta.url), "utf8");
+const PUSH = fs.readFileSync(new URL("../api/push.js", import.meta.url), "utf8");
+const BACKUP = fs.readFileSync(new URL("../api/backup.js", import.meta.url), "utf8");
+const WATCHDOG = fs.readFileSync(new URL("../.github/workflows/health-watchdog.yml", import.meta.url), "utf8");
 
 // ── ดึงสคริปต์เลือก manifest จาก index.html มา "รันจริง" ──────────────────
 // ไม่ใช่แค่ค้นหาข้อความ — เคยพลาดมาแล้ว: แบ็กสแลชใน regex หายตอนเขียนไฟล์
@@ -194,6 +197,23 @@ const sbAllWith = (totalRows) => {
   const fn = new Function("sb", APP.slice(st, en) + " return sbAll;")(sb);
   return { fn, calls };
 };
+
+// ── ดึงตัวเลือกผู้รับแจ้งเตือนตัวจริงมารัน ────────────────────────────────
+// 9 ก.ย. 69 ระบบล่มทั้งเช้า ตัวเฝ้าจับได้และยิงเข้ามาจริง แต่ไม่มีใครได้รับอะไรเลย
+// เพราะผู้ติดตามทั้งสองคนผูกกับสาขา ตัวกรอง admin จึงคัดออกหมด = ผู้รับ 0 คน เงียบสนิท
+const pickTargets = (subs, adminOnly, branchId) => {
+  const st = PUSH.indexOf("const pick = (strictAdmin)");
+  const en = PUSH.indexOf("widened = targets.length > 0; }", st);
+  if (st < 0 || en < 0) throw new Error("ไม่เจอตัวเลือกผู้รับใน api/push.js");
+  const body = PUSH.slice(st, en + 31);
+  return new Function("subs", "adminOnly", "branchId", body + " return targets;")(subs, adminOnly, branchId);
+};
+// ── ดึงตัวกรอง drift ของการสำรองมารัน ────────────────────────────────────
+const driftRe = (() => {
+  const ln = BACKUP.split("\n").find(l => l.startsWith("const IGNORE_DRIFT"));
+  if (!ln) throw new Error("ไม่เจอ IGNORE_DRIFT");
+  return new Function(ln + " return IGNORE_DRIFT;")();
+})();
 
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
@@ -728,6 +748,47 @@ const guards = [
   // ออกรหัสจากรายการที่อ่านมาไม่ครบ = รหัสซ้ำกับวัตถุดิบที่มีอยู่แล้ว
   ["ตัวออกรหัสอ่านรหัสเดิมครบทุกหน้า",
     APP.includes("sbAll(`ingredients?select=code") && APP.includes("&order=code.asc")],
+  // ── แจ้งเตือนต้องถึงคน (บทเรียน 9 ก.ย. 69) ──
+  ["มีคนดูแลทุกสาขาอยู่ → ส่งเฉพาะคนนั้น", (() => {
+    const subs = [{ id: 1, allowed_branches: null }, { id: 2, allowed_branches: [6] }];
+    const t = pickTargets(subs, true, null);
+    return t.length === 1 && t[0].id === 1;
+  })()],
+  // ถ้าไม่มีใครดูแลทุกสาขา ต้องกระจายให้ทุกคนแทน — เตือนถึงคนผิดกลุ่มยังดีกว่าไม่ถึงใครเลย
+  ["ไม่มีใครดูแลทุกสาขา → ห้ามจบที่ผู้รับ 0 คน", (() => {
+    const subs = [{ id: 1, allowed_branches: [6] }, { id: 2, allowed_branches: [8] }];
+    return pickTargets(subs, true, null).length === 2;
+  })()],
+  ["ไม่มีผู้ติดตามเลยก็ต้องไม่พัง", (() => {
+    try { return pickTargets([], true, null).length === 0; } catch { return false; }
+  })()],
+  ["แจ้งเตือนรายสาขายังส่งเฉพาะสาขานั้นเหมือนเดิม", (() => {
+    const subs = [{ id: 1, allowed_branches: [6] }, { id: 2, allowed_branches: [8] }];
+    const t = pickTargets(subs, false, 8);
+    return t.length === 1 && t[0].id === 2;
+  })()],
+  // ── ช่องแจ้งเตือนที่ไม่พึ่งระบบตัวเอง ──
+  // ปลายทางเดิมต้องอ่านรายชื่อผู้รับจากฐานข้อมูลที่กำลังตาย จึงส่งไม่ออกในวันที่ต้องใช้
+  ["ตัวเฝ้ามีช่องแจ้งเตือนที่ยิงตรงไม่ผ่านระบบเรา",
+    WATCHDOG.includes("api.line.me/v2/bot/message/push") && WATCHDOG.includes("secrets.LINE_ALERT_TOKEN")],
+  ["ช่องนั้นทำงานเฉพาะตอนตรวจไม่ผ่าน และล้มแล้วไม่ลามไปขั้นอื่น", (() => {
+    const i = WATCHDOG.indexOf("api.line.me");
+    const seg = WATCHDOG.slice(Math.max(0, i - 900), i);
+    return /if: failure\(\)/.test(seg) && /continue-on-error: true/.test(seg);
+  })()],
+  ["ยังไม่ได้ตั้ง secret ต้องข้ามเงียบๆ ไม่ทำให้ตัวเฝ้าพัง", WATCHDOG.includes("ข้ามช่องนี้") && WATCHDOG.includes("exit 0")],
+  ["ยังมีช่องเดิมอยู่ด้วย ไม่ได้เอาออก", WATCHDOG.includes("foodcost-eta.vercel.app/api/push")],
+  // ── การสำรองรายคืน ──
+  // ขึ้น FAILED ติดกัน 38 คืนโดยไม่มีใครรู้ ทั้งที่ข้อมูลครบทุกตาราง
+  ["ตารางเปล่าที่ค้างอยู่ไม่ตีตกการสำรองอีก",
+    driftRe.test("branch7_backup") && driftRe.test("purchase_orders_branch7_backup")],
+  ["ตารางจริงยังต้องถูกตรวจ drift เหมือนเดิม",
+    !driftRe.test("orders") && !driftRe.test("ingredients") && !driftRe.test("stock_logs") && !driftRe.test("backups")],
+  ["สำรองไม่ผ่านต้องมีคนรู้ ไม่ใช่เงียบ",
+    BACKUP.includes("async function alertBackupProblem(") && BACKUP.includes('if (status !== "success") await alertBackupProblem(')],
+  ["แจ้งเตือนสำรองต้องบอกสาเหตุที่ลงมือแก้ได้", BACKUP.includes("มีตารางใหม่ที่ยังไม่ได้สำรอง")],
+  ["แจ้งเตือนพังต้องไม่ทำให้การสำรองพังตาม",
+    /alertBackupProblem[\s\S]{0,900}catch \{ \/\* แจ้งไม่ได้/.test(BACKUP)],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

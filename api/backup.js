@@ -52,7 +52,7 @@ const TABLES = [
 ].map((t) => (typeof t === "string" ? { name: t, pk: "id" } : { name: t.name, pk: t.pk || "id" }));
 
 // Postgres system/internal tables that legitimately live in `public` but are not app data.
-const IGNORE_DRIFT = /^(pg_|_|spatial_ref_sys$|geometry_columns$|geography_columns$)/;
+const IGNORE_DRIFT = /^(pg_|_|spatial_ref_sys$|geometry_columns$|geography_columns$|branch7_backup$|purchase_orders_branch7_backup$)/;
 
 function loadSA() {
   const raw = (SA_B64 || "").trim();
@@ -328,6 +328,7 @@ export default async function handler(req, res) {
       tables: manifestOut, missing_tables: missing, extra_tables: extra,
       rotation, duration_ms: Date.now() - new Date(started).getTime(),
     });
+    if (status !== "success") await alertBackupProblem(status, name, missing, extra, settled);
     return res.status(200).json({
       ok: status === "success" || status === "degraded", status, file: storedName, driveId: storedDrive,
       gzKB: Math.round(gz.length / 1024), totalRows, verified, missing_tables: missing, extra_tables: extra,
@@ -335,6 +336,31 @@ export default async function handler(req, res) {
     });
   } catch (e) {
     await auditPatch(auditId, { finished_at: new Date().toISOString(), status: "failed", error: String((e && e.message) || e), duration_ms: Date.now() - new Date(started).getTime() });
+    await alertBackupProblem("failed", null, [], [], [], String((e && e.message) || e));
     return res.status(500).json({ ok: false, status: "failed", error: String((e && e.message) || e) });
   }
+}
+
+// บอกให้รู้ว่าคืนนี้สำรองไม่ผ่าน พร้อมเหตุผลที่เจาะจงพอจะลงมือแก้ได้
+// ไม่ใช่แค่ "ล้มเหลว" ลอยๆ — 38 คืนที่ผ่านมาสาเหตุเดียวคือเจอตารางที่ไม่รู้จัก
+// ซึ่งถ้าข้อความบอกตรงนี้ตั้งแต่คืนแรก คงแก้จบไปตั้งแต่ 8 ส.ค. แล้ว
+// ส่งแบบยิงแล้วไม่รอผล และห่อ try ไว้ — แจ้งเตือนพังต้องไม่ทำให้การสำรองพังตาม
+async function alertBackupProblem(status, fileName, missing, extra, settled, err) {
+  try {
+    const badTables = (settled || []).filter((s) => !s.complete).map((s) => s.t);
+    const why = err ? err.slice(0, 120)
+      : badTables.length ? `ดึงข้อมูลไม่สำเร็จ: ${badTables.slice(0, 4).join(", ")}`
+      : (missing || []).length ? `มีตารางใหม่ที่ยังไม่ได้สำรอง: ${missing.slice(0, 4).join(", ")}`
+      : (extra || []).length ? `ตารางในลิสต์หายไปจากฐานข้อมูล: ${extra.slice(0, 4).join(", ")}`
+      : "ไม่ผ่านการตรวจสอบ";
+    await fetch("https://foodcost-eta.vercel.app/api/push", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: "admin",
+        title: "🟠 สำรองข้อมูลไม่ผ่าน",
+        body: `สถานะ ${status} — ${why}`,
+        url: "/",
+      }),
+    });
+  } catch { /* แจ้งไม่ได้ก็ต้องไม่ทำให้การสำรองล้มตาม */ }
 }
