@@ -690,6 +690,12 @@ const api = {
     if(Array.isArray(r)&&r.length)return r[0];
     return await sb("pos_settings", {method:"POST", body:JSON.stringify({branch_id:bid,category_order:order}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
   },
+  // แก้เฉพาะลำดับเมนู — เหตุผลเดียวกับลำดับหมวด ห้าม upsert ทั้งแถวทับค่าอื่น
+  setMenuOrder: async (bid, order) => {
+    const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify({menu_order:order})});
+    if(Array.isArray(r)&&r.length)return r[0];
+    return await sb("pos_settings", {method:"POST", body:JSON.stringify({branch_id:bid,menu_order:order}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
+  },
   // Promotions
   getPromotions: (bid) => sb(`promotions?or=(branch_id.eq.${bid},branch_id.is.null)&order=sort_order.asc`),
   addPromotion: (d) => sb("promotions", {method:"POST", body:JSON.stringify(d)}),
@@ -1457,6 +1463,21 @@ const catOrderOf=(s)=>{const a=s&&s.category_order;return Array.isArray(a)?a.map
 const catSorter=(order)=>{
   const r=new Map((order||[]).map((n,i)=>[String(n),i]));
   return (a,b)=>{const ia=r.has(a)?r.get(a):Infinity,ib=r.has(b)?r.get(b):Infinity;return ia!==ib?ia-ib:thCmp(a,b);};
+};
+// ลำดับ "เมนู" ที่ร้านจัดเอง — เก็บเป็นรายการ id ใน pos_settings.menu_order
+// อยู่คอลัมน์เดียวกับลำดับหมวด จอจัดการ/จอขาย/หน้าลูกค้าสแกน จึงเรียงตรงกันเองโดยไม่ต้องซิงก์อะไรเพิ่ม
+// เจ้าของสั่ง: "จะเอาเมนูไหนขึ้นก่อนลูกค้าจะได้เห็นเมนูนั้นก่อน"
+// เรียงหมวดก่อนเสมอ แล้วค่อยเรียงเมนูภายในหมวด — เมนูที่ยังไม่เคยจัดไปต่อท้ายโดยคงลำดับเดิมไว้
+// (คืน 0 = ไม่สลับที่ เพราะ .sort() ของ JS เสถียร) ยังไม่เคยจัด = เหมือนพฤติกรรมเดิมทุกประการ
+const menuOrderOf=(s)=>{const a=s&&s.menu_order;return Array.isArray(a)?a.map(String):[];};
+const menuSorter=(catOrder,menuOrder)=>{
+  const cs=catSorter(catOrder);
+  const r=new Map((menuOrder||[]).map((id,i)=>[String(id),i]));
+  const rk=(m)=>{const k=String(m&&m.id);return r.has(k)?r.get(k):Infinity;};
+  return (a,b)=>{
+    const c=cs(menuCatOf(a),menuCatOf(b));if(c)return c;
+    const ia=rk(a),ib=rk(b);return ia!==ib?ia-ib:0;
+  };
 };
 // แบ่งยอดเท่ากัน n คน — คิดเป็นสตางค์เพื่อให้ "บวกกลับได้เท่าเดิมเป๊ะ"
 // หารไม่ลงตัวเป็นเรื่องปกติ (฿1000 / 3) เศษสตางค์ต้องไปตกอยู่กับใครสักคน
@@ -18376,7 +18397,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     return ["ทั้งหมด",...seen.sort(catSorter(catOrderOf(posSettings)))];
   },[menus,bidSale,posSettings]);
   const filtered=useMemo(()=>{
-    const cs=catSorter(catOrderOf(posSettings));
+    const ms=menuSorter(catOrderOf(posSettings),menuOrderOf(posSettings));
     return menus.filter(m=>{
       if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
       if((m.availability||{})[bidSale]==="hidden")return false;  // ตั้ง "ซ่อน" → ไม่ขึ้นหน้าขาย (ตรงกับหน้าลูกค้า)
@@ -18384,8 +18405,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       if(!c)return false;                                  // ครัวกลางยังไม่ได้จัดหมวด → ไม่ขึ้นในหน้าขาย
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
-    }).sort((a,b)=>cs(menuCatOf(a),menuCatOf(b)));
-  },[menus,selCat,search,bidSale]);
+    }).sort(ms);
+  },[menus,selCat,search,bidSale,posSettings]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   // มีรายการใหม่ที่ยังไม่ได้ส่งพิมพ์ไหม (เทียบกับที่ส่งไปแล้วใน existingOrder) → ใช้เปิด/ปิดปุ่ม "ส่งรายการ"
   const sentKey=i=>`${i.menu_id}|${i.note||""}|${optionsText(i.options)}`;
@@ -19298,13 +19319,13 @@ function CustomerPage({branchId,tableId,token}){
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
   const cats=useMemo(()=>["ทั้งหมด",...[...new Set(menus.map(menuCatOf).filter(Boolean))].sort(catSorter(catOrderOf(posCfg)))],[menus,posCfg]);
   const filtered=useMemo(()=>{
-    const cs=catSorter(catOrderOf(posCfg));
+    const ms=menuSorter(catOrderOf(posCfg),menuOrderOf(posCfg));
     return menus.filter(m=>{
       const c=menuCatOf(m);
       if(!c)return false;                                    // ยังไม่จัดหมวด → ลูกค้าไม่เห็น
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
-    }).sort((a,b)=>cs(menuCatOf(a),menuCatOf(b)));
+    }).sort(ms);
   },[menus,selCat,search,branchId,posCfg]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
@@ -20553,6 +20574,47 @@ function POSMenuTools({currentBranch,variant="dropdown",onChanged}){
 // "เมนูทั้งหมด" — branch sets availability (ขาย/วันนี้หมด/ซ่อน) + binds add-on
 // options to each menu (chosen from the option library). Category assignment now
 // lives in the หมวดหมู่ manager (one category per menu).
+// สถานะขายของเมนู — ใช้ร่วมกันระหว่างการ์ดกับตัวจอ อยู่นอกคอมโพเนนต์เพื่อไม่ให้สร้างใหม่ทุกเรนเดอร์
+const MENU_AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
+// แยกการ์ดออกมาเป็นคอมโพเนนต์ของตัวเองแล้วครอบ memo เพราะจอนี้มีเมนูกว่า 250 ใบ
+// กดปุ่มสถานะทีเดียวแล้วเรนเดอร์ใหม่ทั้ง 250 ใบ = จอสะดุดและรูปกระพริบ
+// memo ทำให้เรนเดอร์ใหม่เฉพาะใบที่ค่าเปลี่ยนจริง (ใบอื่นยังเป็นวัตถุ m ตัวเดิม)
+// ทุก prop จึงต้องนิ่ง — ฟังก์ชันที่ส่งเข้ามาห่อ useCallback ไว้หมดแล้ว
+// data-mid = ที่หมายให้ตัวลากรู้ว่าใบไหนคือใบไหน
+// ปุ่มข้างในกัน pointerdown ไม่ให้ไปเริ่มจับลาก ไม่งั้นกดปุ่ม "ขาย" ค้างครึ่งวินาทีก็กลายเป็นลากทั้งใบ
+const MenuMgrCard=memo(function MenuMgrCard({m,cur,nOpt,busy,onAvail,onBind,onHold}){
+  return <div data-mid={m.id} onPointerDown={(e)=>onHold(e,m.id)} onContextMenu={(e)=>e.preventDefault()}
+    style={{position:"relative",display:"flex",flexDirection:"column",background:C.white,borderRadius:14,overflow:"hidden",
+    border:`1px solid ${cur?(cur==="sold_out"?"#F59E0B":C.red):C.line}`,boxShadow:"0 2px 8px rgba(15,23,42,.06)",
+    opacity:busy?.5:(cur==="hidden"?.62:1),cursor:"grab",
+    WebkitUserSelect:"none",userSelect:"none",WebkitTouchCallout:"none"}}>
+    <div style={{position:"relative",width:"100%",height:104,flexShrink:0}}>
+      {m.image
+        ?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" draggable={false}
+          style={{width:"100%",height:"100%",objectFit:"cover",pointerEvents:"none",filter:cur?"grayscale(80%)":""}}/>
+        :<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={30} c={cur?C.ink4:C.brand}/></div>}
+      {cur==="sold_out"&&<span style={{position:"absolute",top:6,left:6,fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:10,padding:"1px 7px",fontFamily:"'Sarabun',sans-serif"}}>วันนี้หมด</span>}
+      {cur==="hidden"&&<span style={{position:"absolute",top:6,left:6,fontSize:10,fontWeight:700,color:C.white,background:C.red,borderRadius:10,padding:"1px 7px",fontFamily:"'Sarabun',sans-serif"}}>ซ่อน</span>}
+      {nOpt>0&&<span style={{position:"absolute",top:6,right:6,fontSize:9.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:10,padding:"1px 7px",fontFamily:"'Sarabun',sans-serif"}}>{nOpt} ตัวเลือก</span>}
+    </div>
+    <div style={{padding:"8px 9px 9px",display:"flex",flexDirection:"column",gap:6,flex:1}}>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,lineHeight:1.3,minHeight:34,
+        display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{m.name}</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+        ฿{(+m.price||0).toLocaleString()}{menuCatOf(m)?` · ${menuCatOf(m)}`:""}
+      </div>
+      <div style={{display:"flex",gap:3,marginTop:"auto"}}>
+        {MENU_AVS.map(a=><button key={a.v} onPointerDown={(e)=>e.stopPropagation()} onClick={()=>onAvail(m,a.v)}
+          style={{flex:1,padding:"5px 0",borderRadius:8,cursor:"pointer",fontSize:10.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif",
+          border:`1.5px solid ${cur===a.v?a.c:C.line}`,background:cur===a.v?a.c:C.white,color:cur===a.v?C.white:C.ink3}}>{a.l}</button>)}
+      </div>
+      <button onPointerDown={(e)=>e.stopPropagation()} onClick={()=>onBind(m)}
+        style={{padding:"5px 0",borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",
+        border:`1.5px solid ${nOpt>0?C.teal:C.line}`,background:nOpt>0?C.tealLight:C.white,color:nOpt>0?C.teal:C.ink3}}>➕ ตัวเลือก{nOpt>0?` (${nOpt})`:""}</button>
+    </div>
+  </div>;
+});
+
 function POSMenuAvailManager({currentBranch,onClose}){
   const isCentral=currentBranch?.type==="central";
   const[menus,setMenus]=useState([]);const[lib,setLib]=useState([]);const[loading,setLoading]=useState(true);
@@ -20563,16 +20625,26 @@ function POSMenuAvailManager({currentBranch,onClose}){
   const holdRef=useRef(null);                    // ตัวจับเวลากดค้าง
   const rowRef=useRef(null);
   const[cat,setCat]=useState("");   // "" = ทุกหมวด · หมวดมาจากครัวกลาง สาขาแก้ไม่ได้
+  const[menuOrder,setMenuOrder]=useState([]);   // ลำดับเมนูที่ร้านจัดเอง (รายการ id)
+  const[mDrag,setMDrag]=useState(false);        // กำลังลากการ์ดเมนูอยู่ไหม
+  const mDragRef=useRef(null);                  // ข้อมูลการลาก อ่าน/เขียนตรงๆ ไม่ผ่าน state
+  const mHoldRef=useRef(null);                  // ตัวจับเวลากดค้างของการ์ด
+  const gridRef=useRef(null);
+  const stRef=useRef({});                       // ค่าล่าสุดให้ตัวลากอ่าน โดยตัวลากยังเป็นฟังก์ชันตัวเดิม (memo ถึงจะทำงาน)
   const[bindMenu,setBindMenu]=useState(null);const[bindSel,setBindSel]=useState({});const[bindBusy,setBindBusy]=useState(false);
   const[bulkOpen,setBulkOpen]=useState(false);const[bulkGroups,setBulkGroups]=useState({});const[bulkMenus,setBulkMenus]=useState({});const[bulkBusy,setBulkBusy]=useState(false);
   async function load(){setLoading(true);try{const[ms,ps]=await Promise.all([api.getMenus(),api.getPOSSettings(currentBranch.id)]);setMenus(ms||[]);const s=ps&&ps[0]?ps[0]:null;setLib(Array.isArray(s&&s.option_library)?s.option_library:[]);}catch(e){console.error("menuMgr",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
-  const visible=menus.filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(cat&&menuCatOf(m)!==cat)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
-  async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);}
+  // เรียงเหมือนที่ลูกค้าเห็นเป๊ะๆ — จอนี้คือจอที่ใช้ "จัด" ลำดับนั้น ถ้าเรียงคนละแบบก็จัดไม่ถูก
+  const visible=useMemo(()=>menus
+    .filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(cat&&menuCatOf(m)!==cat)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;})
+    .sort(menuSorter(catOrder,menuOrder)),[menus,cat,q,isCentral,currentBranch.id,catOrder,menuOrder]);
+  stRef.current={visible,menus,catOrder,menuOrder,isCentral,bid:currentBranch.id};
+  const setAvail=useCallback(async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);},[currentBranch.id]);
   // หมวดที่มีอยู่จริงในเมนูของสาขานี้ — ไม่เอาหมวดของสาขาอื่นมาให้กดแล้วว่างเปล่า
   // นับจำนวนเมนูต่อหมวดไว้ด้วย จะได้รู้ว่ากดแล้วเจออะไรบ้างโดยไม่ต้องกดลองทีละอัน
   useEffect(()=>{let ok=true;(async()=>{
-    try{const r=await api.getPOSSettings(currentBranch.id);if(ok)setCatOrder(catOrderOf(r&&r[0]));}catch{}
+    try{const r=await api.getPOSSettings(currentBranch.id);if(ok){setCatOrder(catOrderOf(r&&r[0]));setMenuOrder(menuOrderOf(r&&r[0]));}}catch{}
   })();return()=>{ok=false;};},[currentBranch.id]);
 
   // ลากสลับตำแหน่ง: กดค้างที่ชิปหมวดแล้วลากซ้าย-ขวา
@@ -20655,6 +20727,132 @@ function POSMenuAvailManager({currentBranch,onClose}){
     return()=>el.removeEventListener("touchmove",stop,{passive:false});
   },[dragging]);
 
+  // ── ลากการ์ดเมนูเพื่อจัดลำดับ (เป็นตาราง จึงมีทั้งซ้ายขวาและขึ้นลง) ──
+  // เจ้าของสั่ง "กดค้างลากเมนูเพื่อปรับเปลี่ยนได้ว่าจะเอาเมนูไหนขึ้นก่อน ลูกค้าจะได้เห็นเมนูนั้นก่อน"
+  // ใช้วิธีเดียวกับแถบหมวดที่พิสูจน์แล้วว่าลื่น: ลำดับจริงอยู่นิ่งตลอดการลาก ขยับแค่ "ภาพ" ด้วย transform
+  // (ถ้าสลับลำดับจริงทุกครั้งที่นิ้วขยับ ทั้งตารางจะคำนวณผังใหม่รัวๆ = ภาพกระพริบลายตา)
+  // ต่างจากแถบหมวดตรงต้องคิดทั้ง x และ y และใบที่หลบต้องเลื่อนไป "ช่องข้างเคียง" ซึ่งคำนวณจาก
+  // ตำแหน่งจริงที่วัดไว้ตอนเริ่มจับ ไม่ใช่เดาจากขนาดการ์ด — พอตกบรรทัดขนาดที่เดาไว้จะไม่ตรงทันที
+  // สลับได้เฉพาะภายในหมวดเดียวกัน เพราะการเรียงยึดหมวดเป็นหลัก ลากข้ามหมวดปล่อยแล้วก็เด้งกลับที่เดิม
+  // (จะสลับข้ามหมวด ใช้การลากชิปหมวดด้านบนแทน)
+  const MHOLD_MS=350;
+  function paintM(all){
+    const d=mDragRef.current;if(!d)return;
+    d.cards[d.from].style.transform=`translate3d(${d.dx}px,${d.dy}px,0) scale(1.05)`;
+    if(!all)return;   // ใบอื่นขยับเฉพาะตอนเป้าหมายเปลี่ยน ไม่ต้องไล่เขียนทั้ง 250 ใบทุกเฟรม
+    for(let i=d.lo;i<=d.hi;i++){
+      if(i===d.from)continue;
+      let x=0,y=0;
+      if(d.from<d.to&&i>d.from&&i<=d.to){x=d.rects[i-1].l-d.rects[i].l;y=d.rects[i-1].t-d.rects[i].t;}
+      else if(d.from>d.to&&i>=d.to&&i<d.from){x=d.rects[i+1].l-d.rects[i].l;y=d.rects[i+1].t-d.rects[i].t;}
+      d.cards[i].style.transform=(x||y)?`translate3d(${x}px,${y}px,0)`:"";
+    }
+  }
+  function tickM(){
+    const d=mDragRef.current;if(!d)return;
+    d.raf=requestAnimationFrame(tickM);
+    // ลากไปชิดขอบแล้วให้จอไถลตาม ไม่งั้นย้ายเมนูไปไกลกว่าหนึ่งหน้าจอไม่ได้เลย
+    // เลื่อนแล้วต้องเลื่อนค่าที่วัดไว้ตามด้วย ไม่งั้นตำแหน่งเพี้ยนทั้งกระดาน
+    const box=d.box,b=box?box.getBoundingClientRect():null;
+    if(b){
+      let sp=0;
+      if(d.py<b.top+70)sp=-14;else if(d.py>b.bottom-70)sp=14;
+      if(sp){
+        const p0=box.scrollTop;box.scrollTop=p0+sp;
+        const mv=box.scrollTop-p0;
+        if(mv){d.rects.forEach(r=>{r.t-=mv;r.cy-=mv;});d.sy-=mv;}
+      }
+    }
+    d.dx=d.px-d.sx;d.dy=d.py-d.sy;
+    const cx=d.rects[d.from].cx+d.dx,cy=d.rects[d.from].cy+d.dy;
+    let best=d.to,bd=Infinity;
+    for(let i=d.lo;i<=d.hi;i++){const r=d.rects[i];const dd=(cx-r.cx)*(cx-r.cx)+(cy-r.cy)*(cy-r.cy);if(dd<bd){bd=dd;best=i;}}
+    let changed=false;
+    if(best!==d.to){
+      const r=d.rects[d.to],cd=(cx-r.cx)*(cx-r.cx)+(cy-r.cy)*(cy-r.cy);
+      if(bd<cd-900){d.to=best;changed=true;}   // ต้องใกล้กว่าเป้าเดิมชัดเจน (30px) ถึงเปลี่ยน — กันภาพสั่นสลับไปมา
+    }
+    paintM(changed);
+  }
+  // กดค้างก่อนถึงจะเริ่มลาก ไม่งั้นการเลื่อนดูเมนูจะกลายเป็นการลากสลับโดยไม่ตั้งใจ
+  // ขยับเกิน 8px ก่อนครบเวลา = ตั้งใจเลื่อนดู ไม่ใช่จะลาก → ยกเลิกตัวจับเวลา
+  // ห่อ useCallback ไว้เพราะส่งเข้าไปในการ์ดที่ครอบ memo — ถ้าเปลี่ยนตัวทุกเรนเดอร์ memo จะไม่ทำงานเลย
+  const beginMHold=useCallback((e,id)=>{
+    if(e.pointerType==="mouse"&&e.button!==0)return;
+    const sx=e.clientX,sy=e.clientY;
+    const el=e.currentTarget;
+    const cancel=(ev)=>{if(Math.abs(ev.clientX-sx)>8||Math.abs(ev.clientY-sy)>8)clear();};
+    const clear=()=>{if(mHoldRef.current){clearTimeout(mHoldRef.current);mHoldRef.current=null;}
+      el.removeEventListener("pointermove",cancel);el.removeEventListener("pointerup",clear);el.removeEventListener("pointercancel",clear);};
+    el.addEventListener("pointermove",cancel);el.addEventListener("pointerup",clear);el.addEventListener("pointercancel",clear);
+    mHoldRef.current=setTimeout(()=>{
+      clear();
+      const st=stRef.current,box=gridRef.current;if(!box||!st.visible)return;
+      const ids=st.visible.map(m=>String(m.id));
+      const from=ids.indexOf(String(id));if(from<0)return;
+      const cards=[...box.querySelectorAll("[data-mid]")];
+      if(cards.length!==ids.length)return;   // จอกำลังเปลี่ยนอยู่ อย่าเพิ่งเริ่มลาก
+      // วัดตำแหน่งทุกใบครั้งเดียวตอนเริ่มจับ — ระหว่างลากลำดับจริงไม่ขยับ ค่าจึงใช้ได้ตลอด
+      // (ถ้าไปวัดใหม่ทุกเฟรม จะเป็นการบังคับให้เบราว์เซอร์คำนวณผังใหม่ทุกเฟรม = หนืด)
+      const rects=cards.map(c=>{const r=c.getBoundingClientRect();return {l:r.left,t:r.top,cx:r.left+r.width/2,cy:r.top+r.height/2};});
+      // ขอบเขตของหมวดเดียวกัน — รายการเรียงตามหมวดอยู่แล้ว หมวดหนึ่งจึงเป็นช่วงที่ติดกันเสมอ
+      const myCat=menuCatOf(st.visible[from]);
+      let lo=from,hi=from;
+      while(lo>0&&menuCatOf(st.visible[lo-1])===myCat)lo--;
+      while(hi<ids.length-1&&menuCatOf(st.visible[hi+1])===myCat)hi++;
+      try{el.setPointerCapture(e.pointerId);}catch{}
+      if(navigator.vibrate)try{navigator.vibrate(12);}catch{}   // บอกด้วยการสั่นว่าจับติดแล้ว
+      for(let i=lo;i<=hi;i++){
+        cards[i].style.willChange="transform";
+        cards[i].style.transition=i===from?"none":"transform .18s cubic-bezier(.2,.7,.3,1)";
+      }
+      cards[from].style.zIndex="5";cards[from].style.boxShadow="0 14px 30px rgba(15,23,42,.3)";
+      mDragRef.current={from,to:from,ids,cards,rects,lo,hi,sx,sy,px:sx,py:sy,dx:0,dy:0,box,raf:0};
+      setMDrag(true);
+      paintM(true);
+      mDragRef.current.raf=requestAnimationFrame(tickM);
+    },MHOLD_MS);
+  },[]);
+  function moveMDrag(e){
+    const d=mDragRef.current;if(!d)return;
+    e.preventDefault();
+    d.px=e.clientX;d.py=e.clientY;   // งานจริงทำใน tickM รอบเดียวต่อเฟรม ไม่ทำต่อ event
+  }
+  async function endMDrag(){
+    const d=mDragRef.current;mDragRef.current=null;
+    if(!d)return;
+    if(d.raf)cancelAnimationFrame(d.raf);
+    for(let i=d.lo;i<=d.hi;i++){const el=d.cards[i];el.style.transform="";el.style.transition="";el.style.willChange="";}
+    d.cards[d.from].style.zIndex="";d.cards[d.from].style.boxShadow="";
+    setMDrag(false);
+    if(d.to===d.from)return;
+    // ลำดับที่บันทึกต้องครอบคลุมเมนูทั้งหมดของสาขา ไม่ใช่เฉพาะที่กำลังกรองอยู่บนจอ
+    // ไม่งั้นพอล้างคำค้นหา เมนูที่ไม่ได้อยู่ในผลค้นหาจะหลุดลำดับไปกองท้ายทันที
+    const st=stRef.current;
+    const all=st.menus.filter(m=>st.isCentral||menuVisibleAt(m,st.bid)).sort(menuSorter(st.catOrder,st.menuOrder)).map(m=>String(m.id));
+    const src=String(d.ids[d.from]),dst=String(d.ids[d.to]);
+    const ai=all.indexOf(src);if(ai<0)return;
+    all.splice(ai,1);
+    const bi=all.indexOf(dst);
+    all.splice(bi<0?all.length:(d.to>d.from?bi+1:bi),0,src);   // ลากลง = ไปอยู่หลังใบเป้าหมาย · ลากขึ้น = ไปอยู่หน้า
+    setMenuOrder(all);                                          // ให้จอขยับทันที ไม่ต้องรอเน็ต
+    try{ await api.setMenuOrder(st.bid,all); }
+    catch(e){
+      setMenuOrder(st.menuOrder);
+      const noCol=/column .* does not exist|PGRST204|schema cache/i.test(String((e&&e.message)||e));
+      alert(noCol?"ยังบันทึกลำดับเมนูไม่ได้ — ฐานข้อมูลยังไม่มีช่องเก็บลำดับเมนู (ต้องรัน SQL เพิ่มคอลัมน์ menu_order ครั้งเดียว)"
+                 :"บันทึกลำดับเมนูไม่สำเร็จ: "+friendlyError(e));
+    }
+  }
+  // iOS ไม่สนใจ touch-action ที่เปลี่ยนกลางคัน — ต้องกันการเลื่อนจอด้วย touchmove ที่ไม่ passive
+  useEffect(()=>{
+    if(!mDrag)return;
+    const el=gridRef.current;if(!el)return;
+    const stop=(e)=>{e.preventDefault();};
+    el.addEventListener("touchmove",stop,{passive:false});
+    return()=>el.removeEventListener("touchmove",stop,{passive:false});
+  },[mDrag]);
+
   const catList=(()=>{
     const m=new Map();
     for(const x of menus){
@@ -20665,8 +20863,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
     // ลำดับนี้เปลี่ยนเฉพาะตอนปล่อยนิ้ว — ระหว่างลากต้องอยู่นิ่ง ไม่งั้นภาพกระพริบ
     return [...m.entries()].sort((a,b)=>catSorter(catOrder)(a[0],b[0]));
   })();
-  const AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
-  function openBind(m){const sel={};const raw=((m.options_by_branch||{})[String(currentBranch.id)])||[];raw.forEach(b=>{const id=(typeof b==="string"||typeof b==="number")?b:(b&&b.id);if(id)sel[id]=true;});setBindSel(sel);setBindMenu(m);}
+  const openBind=useCallback(function openBind(m){const sel={};const raw=((m.options_by_branch||{})[String(currentBranch.id)])||[];raw.forEach(b=>{const id=(typeof b==="string"||typeof b==="number")?b:(b&&b.id);if(id)sel[id]=true;});setBindSel(sel);setBindMenu(m);},[currentBranch.id]);
   async function saveBind(){
     if(!bindMenu)return;setBindBusy(true);
     const chosen=lib.filter(g=>bindSel[g.id]).map(g=>g.id);  // store group IDs (reference — library edits propagate live)
@@ -20714,18 +20911,21 @@ function POSMenuAvailManager({currentBranch,onClose}){
         })}
       </div></>}
       {visible.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
-      :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto"}}>
-        {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>
-          <div style={{minWidth:140,flex:"1 1 140px"}}>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{m.name}</div>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>฿{(+m.price||0).toLocaleString()}{menuCatOf(m)?` · ${menuCatOf(m)}`:""}</div>
-          </div>
-          <div style={{display:"flex",gap:4}}>
-            {AVS.map(a=><button key={a.v} onClick={()=>setAvail(m,a.v)} style={{padding:"5px 11px",borderRadius:8,border:`1.5px solid ${cur===a.v?a.c:C.line}`,background:cur===a.v?a.c:C.white,color:cur===a.v?C.white:C.ink3,cursor:"pointer",fontSize:11.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{a.l}</button>)}
-          </div>
-          <button onClick={()=>openBind(m)} style={{display:"flex",alignItems:"center",gap:5,padding:"6px 12px",borderRadius:8,border:`1.5px solid ${nOpt>0?C.teal:C.line}`,background:nOpt>0?C.tealLight:C.white,color:nOpt>0?C.teal:C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>➕ ตัวเลือก{nOpt>0?` (${nOpt})`:""}</button>
-        </div>;})}
-      </div>}
+      :<>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
+          👆 กดค้างที่การ์ดเมนูแล้วลากเพื่อจัดลำดับ (สลับได้ภายในหมวดเดียวกัน) · เมนูที่อยู่ก่อน ลูกค้าเห็นก่อน
+        </div>
+        <div ref={gridRef} onPointerMove={moveMDrag} onPointerUp={endMDrag} onPointerCancel={endMDrag}
+          style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10,alignContent:"start",
+          maxHeight:"58vh",overflowY:mDrag?"hidden":"auto",overflowX:"hidden",padding:"2px 2px 8px",
+          touchAction:mDrag?"none":"pan-y"}}>
+          {visible.map(m=><MenuMgrCard key={m.id} m={m}
+            cur={(m.availability||{})[currentBranch.id]||""}
+            nOpt={getMenuOptions(m,currentBranch.id,lib).length}
+            busy={busyId===m.id}
+            onAvail={setAvail} onBind={openBind} onHold={beginMHold}/>)}
+        </div>
+      </>}
     </>}
     {bindMenu&&<Modal title={`ผูกตัวเลือก — ${bindMenu.name}`} onClose={()=>setBindMenu(null)}>
       {lib.length===0?<div style={{padding:"24px 16px",textAlign:"center",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,lineHeight:1.7}}>ยังไม่มีกลุ่มตัวเลือกในคลัง<br/>ไปสร้างที่ <b>"➕ ตัวเลือกในเมนู"</b> ก่อน แล้วกลับมาผูก</div>
@@ -20972,19 +21172,32 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
   function toggleOpenCat(c){setOpenCats(prev=>{const n=new Set(prev);if(n.has(c))n.delete(c);else n.add(c);return n;});}
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // สาขาไหนยังไม่ได้สร้างหมวด → ว่าง (ขึ้นข้อความให้ไปสร้างก่อน) · เครื่อง branch=null = รวมทุกสาขา
+  // เครื่องพิมพ์เครื่องหนึ่งรับงานได้เฉพาะออเดอร์ของสาขาตัวเอง หมวดที่ให้ติ๊กจึงต้องเป็นหมวด
+  // ที่ "สาขานั้นมีเมนูอยู่จริง" ไม่ใช่หมวดทั้งเครือ
+  // ของเดิมกวาดจากเมนูทุกสาขา → เครื่องที่สาขา 8 เห็น "คุณนายแจ่วฮ้อน" ของสาขา 6 ที่ไม่มีทางพิมพ์เลย
+  // และตัวเลขจำนวนเมนูก็เป็นยอดทั้งเครือ (คุณนายตื่นสาย 39) ทั้งที่สาขานั้นเห็นแค่ 6
+  // ร้ายกว่านั้นคือปุ่ม "เลือกทั้งหมด" ติ๊กหมวดของสาขาอื่นติดไปด้วยแล้วบันทึกลงเครื่อง
+  // เครื่องที่ยังไม่ผูกสาขา (branch_id ว่าง = ใช้ร่วมทุกสาขา) ยังเห็นครบเหมือนเดิม ไม่งั้นจะกลายเป็นตัดหมวดที่มันเคยรับ
+  const branchMenus=useMemo(()=>{
+    const bid=catEditP&&catEditP.branch_id;
+    if(bid==null)return menus||[];
+    return (menus||[]).filter(m=>menuVisibleAt(m,bid));
+  },[menus,catEditP]);
   const allCategories=useMemo(()=>{
     if(!catEditP)return [];
-    const bid=catEditP.branch_id;
     const s=new Set();
-    menus.forEach(m=>{
-      // หมวดเป็นของครัวกลางแล้ว ทุกสาขาชุดเดียวกัน ไม่ต้องแยกตาม branch_id ของเครื่องพิมพ์
-      const c0=menuCatOf(m);
-      if(c0)s.add(c0);
-    });
-    return [...s].sort();
-  },[menus,catEditP]);
-  // เมนูในหมวด c (หมวดของครัวกลาง)
-  const menusInCat=(c)=>menus.filter(m=>menuCatOf(m)===c);
+    branchMenus.forEach(m=>{const c0=menuCatOf(m);if(c0)s.add(c0);});
+    return [...s].sort(thCmp);   // เรียงตามพยัญชนะไทย ไม่ใช่รหัสตัวอักษร (ไม่งั้น Refill เด้งไปอยู่หัวตาราง)
+  },[branchMenus,catEditP]);
+  // หมวดที่เครื่องนี้ติ๊กค้างไว้แต่สาขานี้ไม่มีเมนูในหมวดนั้นแล้ว — ต้องเห็น ไม่ใช่ซ่อนเงียบๆ
+  // (เช่น เซตหมู สาขา 8 ติ๊ก "ยำบุฟเฟต์/เนื้อบุฟเฟต์" ของสาขา 5 ค้างไว้ ดูจากจอไม่ออกเลยว่ามีติ๊กอยู่)
+  const staleCats=useMemo(()=>{
+    if(!catEditP||!Array.isArray(catSel))return [];
+    const live=new Set(allCategories);
+    return catSel.filter(c=>!live.has(c));
+  },[catSel,allCategories,catEditP]);
+  // เมนูในหมวด c — นับเฉพาะเมนูที่สาขานี้เห็น ตัวเลขจะได้ตรงกับที่พิมพ์ออกจริง
+  const menusInCat=(c)=>branchMenus.filter(m=>menuCatOf(m)===c);
   function openCatEdit(p){
     setCatEditP(p);
     setCatSel(p.categories===undefined||p.categories===null?null:[...p.categories]);
@@ -21211,6 +21424,14 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
         {allCategories.length===0
             ?<div style={{padding:30,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีหมวดหมู่เมนู — เพิ่มหมวดในแท็บ "เมนู" ก่อน</div>
             :<>
+              {staleCats.length>0&&<div style={{marginBottom:8,padding:"9px 12px",borderRadius:10,background:"#FEF3C7",border:"1px solid #FDE68A",fontFamily:"'Sarabun',sans-serif"}}>
+                <div style={{fontSize:12,fontWeight:800,color:"#92400E",marginBottom:5}}>⚠️ ติ๊กค้างไว้ {staleCats.length} หมวด ที่สาขานี้ไม่มีเมนูแล้ว</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {staleCats.map(c=><button key={c} onClick={()=>setCatSel(prev=>(prev||[]).filter(x=>x!==c))}
+                    style={{padding:"3px 9px",borderRadius:14,border:"1px solid #FDE68A",background:C.white,color:"#92400E",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{c} ✕</button>)}
+                </div>
+                <div style={{fontSize:10.5,color:"#92400E",marginTop:5,opacity:.85}}>กดที่หมวดเพื่อเอาออก แล้วกดบันทึก · ไม่เอาออกก็ไม่มีผลอะไร แค่ค้างอยู่เฉยๆ</div>
+              </div>}
               <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto",paddingRight:2}}>
                 {allCategories.map(c=>{
                   // catSel เป็น null = เครื่องเก่าที่เคยเป็น catch-all → ถือว่าติ๊กครบ
@@ -21642,9 +21863,11 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   // เมนูที่ยังไม่ได้ตั้งหมวดของสาขานี้จะไม่ขึ้นในตัวเลือก และจะพิมพ์ออกเครื่อง "พิมพ์ทุกหมวด" (catch-all)
   const effCat=menuCatOf;
   // เรียงตามพยัญชนะไทยทั้งหัวหมวดและเมนูข้างใน — 26 หมวด/169 เมนู ถ้าไม่เรียงคือไล่หาไม่เจอ
-  const branchCategories=useMemo(()=>{const s=new Set();(menus||[]).forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort(thCmp);},[menus,currentBranch]);
+  // เห็นเฉพาะหมวดที่สาขานี้มีเมนูจริง — เหมือนจอตั้งค่าเครื่องพิมพ์หลังบ้าน ทั้งสองจอต้องตรงกัน
+  const branchMenus=useMemo(()=>(menus||[]).filter(m=>menuVisibleAt(m,currentBranch&&currentBranch.id)),[menus,currentBranch]);
+  const branchCategories=useMemo(()=>{const s=new Set();branchMenus.forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort(thCmp);},[branchMenus]);
   // .filter() คืนอาร์เรย์ใหม่อยู่แล้ว .sort() ตรงนี้จึงไม่ไปสลับลำดับ menus ตัวจริง
-  const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c).sort((a,b)=>thCmp(a.name,b.name));
+  const menusInCat=(c)=>branchMenus.filter(m=>effCat(m)===c).sort((a,b)=>thCmp(a.name,b.name));
   function openSettings(p){
     setSettingsP(p);setSName(p.name||"");
     // เครื่องเก่าที่เก็บ categories=null คือ "รับทุกหมวด" อยู่เดิม — เปิดมาให้ติ๊กครบทุกหมวด

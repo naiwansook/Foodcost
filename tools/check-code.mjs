@@ -945,9 +945,12 @@ const guards = [
   ["ปล่อยนิ้วแล้วล้าง transform ทิ้งทั้งหมด", APP.includes('d.chips.forEach(el=>{el.style.transform="";')],
   // แถบหมวดเรียงตามที่ลากแล้ว แต่ถ้าตัวเมนูใน "ทั้งหมด" ไม่เรียงตาม การลากก็ไม่ได้ผลตามที่ตั้งใจ
   ["เมนูใน ทั้งหมด จัดกลุ่มตามลำดับหมวด (ทั้งสองฝั่ง)",
-    APP.split(").sort((a,b)=>cs(menuCatOf(a),menuCatOf(b)))").length - 1 === 2],
+    APP.split(").sort(ms);").length - 1 === 2],
   ["ทั้งสองฝั่งอ่านลำดับจากที่เก็บเดียวกัน",
-    APP.includes("const cs=catSorter(catOrderOf(posCfg));") && APP.includes("const cs=catSorter(catOrderOf(posSettings));")],
+    APP.includes("menuSorter(catOrderOf(posCfg),menuOrderOf(posCfg))")
+    && APP.includes("menuSorter(catOrderOf(posSettings),menuOrderOf(posSettings))")],
+  // จอขายเคยลืมใส่ posSettings ใน deps — โหลดตั้งค่ามาทีหลังแล้วจอไม่เรียงใหม่ ลากแล้วเหมือนไม่มีอะไรเกิดขึ้น
+  ["จอขายเรียงใหม่เมื่อตั้งค่ามาถึง", APP.includes("},[menus,selCat,search,bidSale,posSettings]);")],
   // ── บิลต้องมีชื่อโต๊ะเสมอ (เหตุจริง 9 ก.ย. 69: บิล #17 ไม่มีชื่อโต๊ะ ใบครัวเลยไร้ปลายทาง) ──
   // หน้าลูกค้าอ่านชื่อโต๊ะจากสถานะบนจอ ตอนส่งของค้างจากคิวออฟไลน์สถานะยังโหลดไม่เสร็จ
   // ปิดที่ posAppendItems จุดเดียว เพราะทุกทางที่สร้างบิลผ่านฟังก์ชันนี้หมด
@@ -964,6 +967,110 @@ const guards = [
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
 for (const [label, cond] of guards) ok_(label, cond);
+
+// ══════════════════════════════════════════════════════════════════════════
+// ลำดับเมนูที่ร้านจัดเอง — "จะเอาเมนูไหนขึ้นก่อน ลูกค้าจะได้เห็นเมนูนั้นก่อน"
+// ค้นข้อความอย่างเดียวไม่พอ: เขียน .sort(ms) ไว้แต่ตัวเทียบคืนค่าผิด ลำดับบนจอก็ยังผิด
+// ต้องดึงตัวเรียงตัวจริงมาเรียงจริงแล้วดูผล
+// ══════════════════════════════════════════════════════════════════════════
+section("ลำดับเมนูที่ร้านจัดเอง");
+{
+  const L = APP.split("\n");
+  const src = [L.find(l => l.startsWith("const _thColl=")), L.find(l => l.startsWith("const thCmp=")),
+    grabConst(APP, "menuCatOf"), grabConst(APP, "catOrderOf"), grabConst(APP, "catSorter"),
+    grabConst(APP, "menuOrderOf"), grabConst(APP, "menuSorter")].join("\n");
+  const f = new Function(src + "\nreturn {catOrderOf,menuOrderOf,menuSorter};")();
+  const sortWith = (st, ms) => ms.slice().sort(f.menuSorter(f.catOrderOf(st), f.menuOrderOf(st))).map(m => m.name);
+
+  const M = [
+    { id: 1, name: "ข้าวผัด", category: "อาหารจานเดียว" },
+    { id: 2, name: "หมูกระทะ", category: "หมูกระทะ" },
+    { id: 3, name: "ข้าวไข่เจียว", category: "อาหารจานเดียว" },
+    { id: 4, name: "เซตหมู", category: "หมูกระทะ" },
+  ];
+  ck("ยังไม่เคยจัดลำดับ = เรียงหมวดตามตัวอักษรไทย คงลำดับเมนูเดิมไว้",
+    sortWith({}, M), ["หมูกระทะ", "เซตหมู", "ข้าวผัด", "ข้าวไข่เจียว"]);
+  ck("จัดลำดับหมวดแล้ว หมวดนั้นมาก่อนทั้งก้อน",
+    sortWith({ category_order: ["หมูกระทะ"] }, M), ["หมูกระทะ", "เซตหมู", "ข้าวผัด", "ข้าวไข่เจียว"]);
+  ck("ดันเมนูขึ้นก่อนในหมวดเดียวกันได้",
+    sortWith({ menu_order: [3, 1] }, M), ["หมูกระทะ", "เซตหมู", "ข้าวไข่เจียว", "ข้าวผัด"]);
+  // ลำดับเมนูห้ามข้ามหมวด ไม่งั้นลากในจอจัดการแล้วปล่อย ของจะเด้งกลับที่เดิมให้งง
+  ck("ลำดับเมนูไม่ข้ามหมวด — หมวดยังเป็นตัวตัดสินก่อนเสมอ",
+    sortWith({ category_order: ["อาหารจานเดียว", "หมูกระทะ"], menu_order: [4, 2, 3, 1] }, M),
+    ["ข้าวไข่เจียว", "ข้าวผัด", "เซตหมู", "หมูกระทะ"]);
+  ck("เมนูที่ยังไม่เคยจัด ไปต่อท้ายหมวดโดยคงลำดับเดิม",
+    sortWith({ menu_order: [4] }, M), ["เซตหมู", "หมูกระทะ", "ข้าวผัด", "ข้าวไข่เจียว"]);
+  ck("id เป็นเลขหรือข้อความก็ต้องเจอเหมือนกัน (jsonb คืนมาเป็นได้ทั้งสองแบบ)",
+    sortWith({ menu_order: ["3"] }, M), ["หมูกระทะ", "เซตหมู", "ข้าวไข่เจียว", "ข้าวผัด"]);
+  ck("id ที่ไม่มีเมนูแล้ว (ลบทิ้งไป) ไม่ทำให้ลำดับเพี้ยน",
+    sortWith({ menu_order: [999, 3] }, M), ["หมูกระทะ", "เซตหมู", "ข้าวไข่เจียว", "ข้าวผัด"]);
+
+  ok_("บันทึกลำดับเมนูแตะเฉพาะคอลัมน์ลำดับ ไม่ทับ VAT/QR",
+    APP.includes('{method:"PATCH", body:JSON.stringify({menu_order:order})}'));
+  ok_("ทั้งสามจออ่านตัวเรียงตัวเดียวกัน", APP.split("menuSorter(").length - 1 >= 4);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// จอ "เมนูทั้งหมด" — การ์ดเหมือนหน้าลูกค้า + กดค้างลากจัดลำดับ ต้องลื่นไม่กระพริบ
+// ══════════════════════════════════════════════════════════════════════════
+section("จอเมนูทั้งหมด: ตารางการ์ด + ลากจัดลำดับ");
+{
+  ok_("เป็นการ์ดในตาราง ไม่ใช่รายการแถวยาว", APP.includes('gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))"'));
+  ok_("การ์ดมีรูปแบบเดียวกับหน้าลูกค้าสแกน (โหลดรูปแบบไม่หน่วงจอ)",
+    APP.includes("const MenuMgrCard=memo(function MenuMgrCard(") && APP.includes('driveImgSrc(m.image,160)'));
+  // 250 ใบ: ถ้าไม่ครอบ memo กดสถานะทีเดียวเรนเดอร์ใหม่ทั้งจอ = สะดุด/รูปกระพริบ
+  ok_("การ์ดจำผลไว้ ไม่เรนเดอร์ใหม่ทั้งจอเวลากดปุ่มใบเดียว", APP.includes("memo(function MenuMgrCard"));
+  ok_("ฟังก์ชันที่ส่งให้การ์ดนิ่ง ไม่งั้น memo ไม่มีผลเลย",
+    APP.includes("const setAvail=useCallback(async function setAvail(") &&
+    APP.includes("const openBind=useCallback(function openBind(") &&
+    APP.includes("const beginMHold=useCallback("));
+  ok_("จอจัดการเรียงเหมือนที่ลูกค้าเห็น", APP.includes(".sort(menuSorter(catOrder,menuOrder))"));
+  // ── ลากแล้วต้องลื่น: ใช้ท่าเดียวกับแถบหมวดที่พิสูจน์แล้ว ──
+  ok_("ต้องกดค้างก่อนถึงจะลาก ไม่ใช่แตะแล้วลากทันที", APP.includes("const MHOLD_MS=350;"));
+  ok_("วัดตำแหน่งการ์ดครั้งเดียวตอนเริ่มจับ ไม่วัดซ้ำทุกเฟรม",
+    APP.includes("const rects=cards.map(c=>{const r=c.getBoundingClientRect();"));
+  ok_("ระหว่างลากเขียน transform ลง DOM ตรงๆ ไม่เรนเดอร์ใหม่", APP.includes("d.cards[d.from].style.transform=") && APP.includes("translate3d(" + "$" + "{d.dx}px,"));
+  ok_("ตารางต้องคิดทั้งซ้ายขวาและขึ้นลง ไม่ใช่แกนเดียว",
+    APP.includes("x=d.rects[i-1].l-d.rects[i].l;y=d.rects[i-1].t-d.rects[i].t;"));
+  ok_("ใบอื่นขยับเฉพาะตอนเป้าหมายเปลี่ยน ไม่ไล่เขียนทั้ง 250 ใบทุกเฟรม", APP.includes("if(!all)return;"));
+  ok_("กันภาพสั่นสลับไปมาตรงกึ่งกลางระหว่างสองช่อง", APP.includes("if(bd<cd-900)"));
+  ok_("ลากชิดขอบแล้วจอไถลตาม และค่าที่วัดไว้ขยับตามด้วย",
+    APP.includes("if(mv){d.rects.forEach(r=>{r.t-=mv;r.cy-=mv;});d.sy-=mv;}"));
+  ok_("ปล่อยนิ้วแล้วล้าง transform ทิ้งทั้งหมด",
+    APP.includes('el.style.transform="";el.style.transition="";el.style.willChange="";'));
+  ok_("กดปุ่มบนการ์ดต้องไม่กลายเป็นการลาก", APP.split("onPointerDown={(e)=>e.stopPropagation()}").length - 1 >= 2);
+  ok_("iOS: กันจอเลื่อนด้วย touchmove ไม่ใช่ touch-action (เปลี่ยนกลางท่าทางไม่มีผล)",
+    APP.includes("},[mDrag]);"));
+  ok_("บันทึกลำดับไม่สำเร็จต้องคืนลำดับเดิม", APP.includes("      setMenuOrder(st.menuOrder);"));
+  // คอลัมน์ menu_order เป็นของใหม่ — ก่อนรัน SQL ต้องบอกเป็นภาษาคน ไม่ใช่โยนข้อความดิบใส่หน้าเจ้าของ
+  ok_("ยังไม่ได้รัน SQL ต้องบอกเป็นภาษาคน", APP.includes("ต้องรัน SQL เพิ่มคอลัมน์ menu_order ครั้งเดียว"));
+  // กรองด้วยคำค้นอยู่แล้วลาก: ถ้าบันทึกแค่ที่เห็นบนจอ เมนูที่เหลือจะหลุดลำดับไปกองท้ายทันที
+  ok_("ลำดับที่บันทึกครอบคลุมเมนูทั้งสาขา ไม่ใช่เฉพาะที่กรองอยู่บนจอ",
+    APP.includes("const all=st.menus.filter(m=>st.isCentral||menuVisibleAt(m,st.bid)).sort(menuSorter(st.catOrder,st.menuOrder)).map(m=>String(m.id));"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// หมวดของเครื่องพิมพ์ต้องเป็นหมวด "ของสาขานั้น"
+// เหตุจริง 9 ก.ย. 69: เครื่อง "เซตหมู" สาขา 8 ติ๊กหมวดของสาขา 5/6 ไว้ 9 หมวด
+// เพราะจอกวาดหมวดจากเมนูทั้งเครือ แล้วปุ่ม "เลือกทั้งหมด" ติ๊กติดไปหมด
+// ══════════════════════════════════════════════════════════════════════════
+section("หมวดของเครื่องพิมพ์ = หมวดของสาขานั้น");
+{
+  ok_("จอหลังบ้านกรองเมนูตามสาขาของเครื่องก่อนหาหมวด",
+    APP.includes("const bid=catEditP&&catEditP.branch_id;") && APP.includes("return (menus||[]).filter(m=>menuVisibleAt(m,bid));"));
+  ok_("เครื่องที่ยังไม่ผูกสาขา = ใช้ร่วมทุกสาขา ต้องเห็นครบเหมือนเดิม", APP.includes("if(bid==null)return menus||[];"));
+  ok_("เรียงหมวดตามพยัญชนะไทย ไม่ใช่รหัสตัวอักษร", APP.includes("return [...s].sort(thCmp);   // เรียงตามพยัญชนะไทย"));
+  ok_("จำนวนเมนูต่อหมวดนับเฉพาะเมนูที่สาขานี้เห็น", APP.includes("const menusInCat=(c)=>branchMenus.filter(m=>menuCatOf(m)===c);"));
+  ok_("จอสถานะเครื่องพิมพ์หน้าร้านกรองตามสาขาเหมือนกัน",
+    APP.includes("const branchMenus=useMemo(()=>(menus||[]).filter(m=>menuVisibleAt(m,currentBranch&&currentBranch.id)),[menus,currentBranch]);"));
+  // ซ่อนเฉยๆ อันตราย: ติ๊กที่ค้างอยู่จะมองไม่เห็นแต่ยังอยู่ในฐานข้อมูล
+  ok_("หมวดที่ติ๊กค้างไว้แต่สาขานี้ไม่มีแล้ว ต้องโชว์ให้เห็นและกดเอาออกได้",
+    APP.includes("const staleCats=useMemo(()=>{") && APP.includes("ติ๊กค้างไว้ {staleCats.length} หมวด"));
+  // "เลือกทั้งหมด" กับตอนบันทึกต้องใช้ชุดเดียวกับที่ตาเห็น ไม่ใช่ชุดทั้งเครือ
+  ok_("เลือกทั้งหมด/บันทึก ใช้หมวดของสาขานั้น",
+    APP.includes("setCatSel([...allCategories])") && APP.includes("categories:catSel||[...allCategories]"));
+}
+
 
 console.log(`\n${"═".repeat(52)}`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
