@@ -923,6 +923,13 @@ const guards = [
   ["เห็นทั้งคนรับออเดอร์และคนปิดบิล", APP.includes("รับออเดอร์โดย") && APP.includes("ปิดบิลโดย")],
   ["ลูกค้าสแกนสั่งเองต้องอ่านออก ไม่ใช่คำว่า customer", APP.includes("ลูกค้าสแกนสั่งเอง")],
   ["ดึงบิลย้อนหลังแบบแบ่งหน้า (ช่วงเดือนเกิน 1000 บิลได้)", APP.includes("getPOSOrdersByDay: (bid, startISO, endISO) => sbAll(")],
+  // iOS: touch-action ที่เปลี่ยนกลางท่าทางไม่มีผล ต้องห้ามเลื่อนด้วย preventDefault
+  // และต้องกันเมนูกดค้างของระบบ ไม่งั้นมันแย่ง pointer ไป = กดค้างแล้วไม่มีอะไรเกิดขึ้น
+  ["ห้ามจอเลื่อนระหว่างลากด้วย preventDefault ไม่ใช่ touch-action",
+    APP.includes('el.addEventListener("touchmove",stop,{passive:false});')
+    && APP.includes('el.removeEventListener("touchmove",stop,{passive:false});')],
+  ["ผูกตัวห้ามเลื่อนเฉพาะตอนลาก ไม่ผูกค้างไว้", APP.includes("const dragging=!!drag;") && APP.includes("if(!dragging)return;")],
+  ["กันเมนูกดค้างของ iOS ที่แย่ง pointer", APP.includes("WebkitTouchCallout:\"none\"") && APP.includes("onContextMenu:(e)=>e.preventDefault()")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

@@ -20603,6 +20603,14 @@ function POSMenuAvailManager({currentBranch,onClose}){
     try{ await api.setCategoryOrder(currentBranch.id,names); }
     catch(e){ setCatOrder(catOrder); alert("บันทึกลำดับไม่สำเร็จ: "+friendlyError(e)); }
   }
+  const dragging=!!drag;
+  useEffect(()=>{
+    if(!dragging)return;
+    const el=rowRef.current;if(!el)return;
+    const stop=(e)=>{e.preventDefault();};
+    el.addEventListener("touchmove",stop,{passive:false});
+    return()=>el.removeEventListener("touchmove",stop,{passive:false});
+  },[dragging]);
   // ระหว่างลาก แสดงลำดับที่จะได้จริงเลย จะได้เห็นผลก่อนปล่อยนิ้ว
   const previewNames=(()=>{
     if(!drag)return null;
@@ -20661,9 +20669,10 @@ function POSMenuAvailManager({currentBranch,onClose}){
         {[["","ทั้งหมด",menus.filter(x=>isCentral||menuVisibleAt(x,currentBranch.id)).length],...catList.map(([c,n])=>[c,c,n])].map(([v,l,n])=>{
           const on=cat===v;
           const held=!!drag&&drag.names[drag.from]===v;
-          return <button key={v||"__all"} {...(v?{"data-cat":v,onPointerDown:(e)=>beginHold(e,v)}:{})}
+          return <button key={v||"__all"} {...(v?{"data-cat":v,onPointerDown:(e)=>beginHold(e,v),onContextMenu:(e)=>e.preventDefault()}:{})}
             onClick={()=>{if(!drag)setCat(v);}}
             style={{flexShrink:0,padding:"5px 13px",borderRadius:16,cursor:v?"grab":"pointer",
+            WebkitUserSelect:"none",userSelect:"none",WebkitTouchCallout:"none",
             fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:on?800:600,whiteSpace:"nowrap",
             border:`1px solid ${held?C.brandDark:(on?C.brand:C.line)}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,
             transform:held?"scale(1.08)":"none",boxShadow:held?"0 6px 16px rgba(15,23,42,.22)":"none",
