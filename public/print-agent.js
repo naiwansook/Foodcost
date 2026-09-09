@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 35;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 36;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -272,7 +272,7 @@ function bufsMode(parts) {
   return text === 0 ? "รูปภาพ" : (raster === 0 ? "ตัวอักษร(สำรอง)" : "ผสม รูปภาพ+ตัวอักษร");
 }
 // รวมรายการเป็นบัฟเฟอร์พิมพ์ (เรนเดอร์ทุกใบพร้อมกัน) — ใช้โดยเส้นทางพิมพ์ซ้ำ (rp)
-async function itemsToBuffer(items, tableNum) {
+async function itemsToBuffer(items, tableNum, meta) {
   const parts = await renderItemBufs(items, tableNum, meta);
   return { buf: Buffer.concat(parts.map(p => p.buf)), mode: bufsMode(parts) };
 }
@@ -377,9 +377,14 @@ async function handleReprintRequests(printers) {
       state.reprinted[p.id] = rp.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
       const its = Array.isArray(rp.items) ? rp.items : [];
       if (!its.length) continue;
-      const { buf, mode } = await itemsToBuffer(its, rp.table || "-");   // พิมพ์ซ้ำเป็นรูปภาพไทยคมชัด (ถอยไปตัวอักษรถ้าล้มเหลว)
-      try { await sendToPrinter(p.ip, p.port, buf); console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`); }
-      catch (e) { console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`); }
+      // การเรนเดอร์ต้องอยู่ในกันชนเดียวกับการส่ง — เดิมอยู่นอกกันชน พอมันโยน
+      // คำสั่งก็ถูกกินไปแล้วจากบรรทัดบน (มาร์คก่อนส่ง) และ tick ทั้งรอบตายกลางทาง
+      // = กดปุ่มพิมพ์ซ้ำแล้วเงียบสนิท ไม่มีอะไรเกิดขึ้น และออเดอร์ปกติในรอบนั้นก็ไม่ได้พิมพ์ด้วย
+      try {
+        const { buf, mode } = await itemsToBuffer(its, rp.table || "-", { bill: rp.bill, by: rp.by });
+        await sendToPrinter(p.ip, p.port, buf);
+        console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`);
+      } catch (e) { console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`); }
     }
   }
 }

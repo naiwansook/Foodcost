@@ -18531,8 +18531,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
           // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
           try{
-            printKitchen([{...target,qty:target.qty,name:`❌ ยกเลิก: ${target.name}`,note:`(ยกเลิกโดย ${currentUser?.username||"พนักงาน"})`}],
-              table?.table_number,printers);
+            await agentReprint([{...target,qty:target.qty,name:`❌ ยกเลิก: ${target.name}`,note:`(ยกเลิกโดย ${currentUser?.username||"พนักงาน"})`}],
+              {okMsg:"❌ แจ้งครัวแล้วว่ายกเลิกรายการนี้ — ใบจะออกใน ~5 วินาที",
+               noneMsg:"⚠️ ยกเลิกในระบบแล้ว แต่เมนูนี้ไม่มีเครื่องพิมพ์รับ — กรุณาบอกครัวด้วยตัวเอง"});
           }catch(err){
             console.warn("แจ้งครัวเรื่องยกเลิกไม่สำเร็จ",err);
             posToast("⚠️ ยกเลิกในระบบแล้ว แต่แจ้งครัวไม่สำเร็จ — กรุณาบอกครัวด้วยตัวเอง","warn");
@@ -18544,7 +18545,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   }
 
   // พิมพ์ใบครัวซ้ำผ่าน "ตัวพิมพ์ (agent)" — ส่งไป "ทุกเครื่องที่ตั้งค่าให้รับหมวดนั้น" (ตรงตาม กำหนดการพิมพ์) ไม่ใช่เครื่องเดียว
-  async function agentReprint(list){
+  async function agentReprint(list,opts){
     let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งแก้หมวด/เครื่องพิมพ์ในหน้าต่างตั้งค่า)
     try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
     const usable=(prs||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
@@ -18552,15 +18553,16 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     for(const p of usable){
       const mine=(list||[]).filter(it=>printerHandles(p,it));
       if(!mine.length)continue;
-      ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:mine,table:table.table_number})}));
+      ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:mine,table:table.table_number,bill:existingOrder?.id??null,by:currentUser?.username||null})}));
       mine.forEach(it=>sentItems.add(it));
     }
     const noPrinter=(list||[]).filter(it=>!usable.some(p=>printerHandles(p,it))).length;
     try{if(ups.length)await Promise.all(ups);}catch(e){alert("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
     const sent=sentItems.size;
-    if(sent&&noPrinter)posToast(`🔁 ส่งพิมพ์ซ้ำ ${sent} รายการ · อีก ${noPrinter} ยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
-    else if(sent)posToast("🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
-    else posToast("⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
+    const o=opts||{};
+    if(sent&&noPrinter)posToast(`${o.okMsg||"🔁 ส่งพิมพ์ซ้ำแล้ว"} · อีก ${noPrinter} รายการยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
+    else if(sent)posToast(o.okMsg||"🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+    else posToast(o.noneMsg||"⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
   }
 
   async function cancelOrder(){
@@ -21721,7 +21723,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10,flexShrink:0}}>
         <button onClick={()=>printTableQR(selTable,currentBranch,printers)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
-      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})} printers={printers}/>
+      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})} printers={printers}/>
     </Modal>}
     {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation}/>}
     {showReceipt&&<ReceiptSettingsModal currentBranch={currentBranch} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}

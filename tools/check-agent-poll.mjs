@@ -397,6 +397,64 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("รายการที่พิมพ์ไม่ผ่านก็บันทึกชื่อโต๊ะแบบเดียวกัน", SRC.includes("table: tableLabel(order),"));
 }
 
+// ── พิมพ์ซ้ำต้องออกจริง (เหตุจริง 9 ก.ย. 69) ──────────────────────────────
+// v35 เพิ่มพารามิเตอร์ meta ให้ renderItemBufs แล้วไล่แก้จุดเรียกทั้งหมด แต่ itemsToBuffer
+// ถูกแก้ให้ "ส่ง meta ต่อ" โดยไม่ได้รับ meta เข้ามาเป็นพารามิเตอร์ → อ้างตัวแปรที่ไม่มีอยู่จริง
+// ทุกครั้งที่กดปุ่มพิมพ์ซ้ำ ตัวพิมพ์จึงโยน ReferenceError: meta is not defined
+// และเพราะคำสั่งถูกมาร์คว่า "เห็นแล้ว" ก่อนเรนเดอร์ มันจึงหายไปเลย ไม่ลองใหม่ ไม่มีร่องรอย
+// ด่านแบบค้นข้อความจับไม่ได้เลย — ต้องดึงฟังก์ชันจริงมา "เรียก" ถึงจะเจอ
+{
+  const grab = (name) => {
+    const st = SRC.indexOf(`function ${name}(`);
+    if (st < 0) throw new Error(`ไม่เจอ ${name}`);
+    let d = 0;
+    for (let j = SRC.indexOf("{", st); j < SRC.length; j++) {
+      if (SRC[j] === "{") d++;
+      else if (SRC[j] === "}") { d--; if (!d) return SRC.slice(SRC.lastIndexOf("async", st) === st - 6 ? st - 6 : st, j + 1); }
+    }
+    throw new Error(`อ่าน ${name} ไม่จบ`);
+  };
+
+  // ① เรียกของจริง — ถ้ายังอ้างตัวแปรที่ไม่มี จะโยนตรงนี้
+  let seen = null, threw = null;
+  const itemsToBuffer = new Function("renderItemBufs", "Buffer", "bufsMode",
+    grab("itemsToBuffer") + "\nreturn itemsToBuffer;")(
+      async (items, tableNum, meta) => { seen = { items, tableNum, meta }; return [{ buf: Buffer.from([1]) }]; },
+      Buffer, () => "รูปภาพ");
+  let out = null;
+  try { out = await itemsToBuffer([{ name: "ทดสอบ", qty: 1 }], "C7", { bill: 41, by: "customer" }); }
+  catch (e) { threw = e; }
+  ok_("พิมพ์ซ้ำ: เรียกตัวรวมบัฟเฟอร์แล้วไม่ระเบิด", !threw || !String(threw.message));
+  ok_("พิมพ์ซ้ำ: ส่งชื่อโต๊ะและข้อมูลใบต่อไปให้ตัวเรนเดอร์ครบ",
+    !!seen && seen.tableNum === "C7" && !!seen.meta && seen.meta.bill === 41 && seen.meta.by === "customer");
+  ok_("พิมพ์ซ้ำ: ได้บัฟเฟอร์กลับมาจริง", !!out && Buffer.isBuffer(out.buf) && out.buf.length > 0);
+
+  // ② ทุกฟังก์ชันที่ใช้ meta ต้องรับ meta เข้ามาเอง — กันบั๊คชนิดเดียวกันซ้ำอีก
+  const bad = [];
+  const re = /(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)\s*\{/g;
+  let m;
+  while ((m = re.exec(SRC))) {
+    const [, name, params] = m;
+    let d = 0, end = -1;
+    for (let j = SRC.indexOf("{", m.index + m[0].length - 1); j < SRC.length; j++) {
+      if (SRC[j] === "{") d++;
+      else if (SRC[j] === "}") { d--; if (!d) { end = j; break; } }
+    }
+    const body = SRC.slice(m.index, end + 1);
+    if (!/\bmeta\b/.test(body)) continue;
+    const declared = params.split(",").some(p => p.trim().split("=")[0].trim() === "meta")
+      || /\b(?:const|let|var)\s+meta\b/.test(body);
+    if (!declared) bad.push(name);
+  }
+  ok_("ไม่มีฟังก์ชันไหนใช้ meta โดยไม่ได้รับเข้ามา (" + (bad.length ? bad.join(", ") : "ผ่านทุกตัว") + ")", bad.length === 0);
+
+  // ③ เรนเดอร์ล้มต้องไม่กลืนคำสั่งพร้อมทำให้ทั้งรอบตาย — ต้องอยู่ในกันชนเดียวกับการส่ง
+  ok_("พิมพ์ซ้ำ: เรนเดอร์อยู่ในกันชนเดียวกับการส่ง",
+    SRC.includes("        const { buf, mode } = await itemsToBuffer(its, rp.table || \"-\", { bill: rp.bill, by: rp.by });\n        await sendToPrinter(p.ip, p.port, buf);"));
+  ok_("พิมพ์ซ้ำ: ยังมาร์คก่อนส่งอยู่ (ห้ามตัวพิมพ์ลองพิมพ์ใหม่เอง)",
+    SRC.includes("state.reprinted[p.id] = rp.at; saveState();"));
+}
+
 console.log("\n" + "=".repeat(52));
 console.log(fail === 0 ? "OK ผ่านทั้งหมด " + pass + " ข้อ" : "FAIL ล้มเหลว " + fail + " ข้อ (ผ่าน " + pass + ")");
 process.exitCode = fail ? 1 : 0;
