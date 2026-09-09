@@ -796,6 +796,15 @@ const guards = [
   // ฐานข้อมูลอยู่โซล (ap-northeast-2) ทุกคำสั่งจึงอ้อมโลก และรูปเมนู/ใบครัวก็ช้าตาม
   ["ฟังก์ชันรันที่สิงคโปร์ ไม่ใช่อเมริกา",
     Array.isArray(VERCEL.regions) && VERCEL.regions.length === 1 && VERCEL.regions[0] === "sin1"],
+  // ── ลบโต๊ะที่มีบิลเก่า ──
+  // ฐานข้อมูลกันไว้ด้วย foreign key (ถูกแล้ว — ลบผ่านเมื่อไหร่ประวัติการขายพัง)
+  // แต่เดิมโยนข้อความดิบ 23503 ใส่หน้าพนักงาน ซึ่งอ่านไม่รู้เรื่องและทำอะไรต่อไม่ได้
+  ["ลบโต๊ะไม่ได้ต้องอธิบายเป็นภาษาคน ไม่ใช่โยน error ดิบ",
+    APP.includes("const fk=/23503|foreign key|still referenced/i.test")],
+  ["เสนอซ่อนออกจากผังแทน (บิลเก่าไม่หาย)",
+    APP.includes("api.updatePOSTable(id,{active:false})") && APP.includes("โต๊ะนี้มีประวัติการขาย")],
+  ["ถามก่อนซ่อน ไม่ตัดสินใจแทน", APP.includes('confirmLabel:"ซ่อนออกจากผัง"')],
+  ["ผังโต๊ะยังกรองเฉพาะโต๊ะที่เปิดใช้อยู่", APP.includes("active=eq.true")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

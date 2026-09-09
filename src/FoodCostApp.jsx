@@ -21184,7 +21184,32 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   // Table editing from the floor plan (optimistic local update + persist)
   async function handleAddTable(d){try{await api.addPOSTable({...d,branch_id:currentBranch.id,status:"available",active:true});await loadTables();}catch(e){alert("เพิ่มโต๊ะไม่สำเร็จ: "+(e&&e.message||e));}}
   async function handleUpdateTable(id,d){setTables(p=>p.map(t=>t.id===id?{...t,...d}:t));try{await api.updatePOSTable(id,d);}catch(e){alert("แก้ไขโต๊ะไม่สำเร็จ: "+(e&&e.message||e));loadTables();}}
-  async function handleDeleteTable(id){const prev=tables;setTables(p=>p.filter(t=>t.id!==id));try{await api.deletePOSTable(id);}catch(e){alert("ลบโต๊ะไม่สำเร็จ: "+(e&&e.message||e));setTables(prev);}}
+  // โต๊ะที่เคยมีบิลลบทิ้งไม่ได้ — บิลเก่าอ้างถึงแถวนี้อยู่ (foreign key ของฐานข้อมูล)
+  // ตัวกันนี้ถูกต้องแล้วและต้องคงไว้: ลบผ่านเมื่อไหร่ ประวัติการขายจะชี้ไปที่โต๊ะที่ไม่มีอยู่
+  // แต่เดิมเด้งข้อความดิบของฐานข้อมูล (23503 ... violates foreign key constraint) ใส่หน้าพนักงาน
+  // ซึ่งอ่านไม่รู้เรื่องและไม่บอกว่าต้องทำอะไรต่อ · ทางที่ถูกคือซ่อนออกจากผัง
+  // (tables.active=false — getPOSTables กรอง active=eq.true อยู่แล้ว โต๊ะจึงหายจากหน้าขาย
+  //  ส่วนบิลเก่ายังอ้างถึงแถวเดิมได้ครบ รายงานย้อนหลังไม่พัง)
+  async function handleDeleteTable(id){
+    const prev=tables;
+    setTables(p=>p.filter(t=>t.id!==id));
+    try{ await api.deletePOSTable(id); return; }
+    catch(e){
+      const fk=/23503|foreign key|still referenced/i.test(String((e&&e.message)||e));
+      if(!fk){ alert("ลบโต๊ะไม่สำเร็จ: "+friendlyError(e)); setTables(prev); return; }
+      setTables(prev);   // เอาโต๊ะกลับขึ้นจอก่อน แล้วค่อยถาม จะได้ไม่หายไปทั้งที่ยังไม่ตัดสินใจ
+      const ok=await confirmDlg({
+        title:"โต๊ะนี้มีประวัติการขาย",
+        message:"ลบออกจากระบบไม่ได้ เพราะมีบิลเก่าอ้างถึงโต๊ะนี้อยู่ — ถ้าลบ ประวัติการขายและรายงานย้อนหลังจะเสียหาย\n\nซ่อนออกจากผังแทนไหม? โต๊ะจะหายจากหน้าขาย แต่บิลเก่ายังอยู่ครบ",
+        confirmLabel:"ซ่อนออกจากผัง",
+        cancelLabel:"ไม่ต้อง เก็บไว้",
+        danger:false,
+      });
+      if(!ok)return;
+      try{ await api.updatePOSTable(id,{active:false}); setTables(p=>p.filter(t=>t.id!==id)); }
+      catch(e2){ alert("ซ่อนโต๊ะไม่สำเร็จ: "+friendlyError(e2)); }
+    }
+  }
   async function handleMoveTable(id,x,y){setTables(p=>p.map(t=>t.id===id?{...t,x,y}:t));try{await api.updatePOSTable(id,{x,y});}catch(e){console.error("move table save failed",e);}}
   // Zone rename/delete from the floor plan (rename cascades to tables; delete moves its tables to no-zone)
   async function handleRenameZone(oldName,newName,id){
