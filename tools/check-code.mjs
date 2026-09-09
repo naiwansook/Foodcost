@@ -1152,6 +1152,15 @@ section("หมวดหมู่ตรงกันทุกจอ");
 // ══════════════════════════════════════════════════════════════════════════
 section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเลิก ถึงครัวจริง");
 {
+  // ตัวตรวจ "ตัวแปรไม่มีอยู่จริง" ต้องกวาดตัวพิมพ์กับ api/* ด้วย ไม่ใช่แค่ไฟล์แอป
+  // ถ้าตัดออก บั๊คแบบ v35 (อ้าง meta ที่ไม่มี → ปุ่มพิมพ์ซ้ำตายเงียบ) จะหลุดขึ้นระบบได้อีก
+  {
+    const U = fs.readFileSync(new URL("./check-undef.mjs", import.meta.url), "utf8");
+    ok_("ตัวตรวจตัวแปรกวาดตัวพิมพ์ด้วย", U.includes('"public/print-agent.js",'));
+    ok_("ตัวตรวจตัวแปรกวาดฟังก์ชันฝั่งเซิร์ฟเวอร์ด้วย", U.includes('fs.readdirSync("api")'));
+    ok_("build เรียกตัวตรวจตัวแปรก่อนเสมอ",
+      JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts.build.startsWith("node tools/check-undef.mjs"));
+  }
   ok_("จอขายส่งรายชื่อเครื่องพิมพ์ให้จอสั่งอาหารจริง",
     APP.includes("<POSOrderPanel table={selTable}") && /<POSOrderPanel\b[^>]*\sprinters=\{printers\}/.test(APP));
   // ทุกที่ที่เรียก POSOrderPanel ต้องส่ง printers ไม่ใช่แค่ที่แรก

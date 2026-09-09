@@ -20,7 +20,14 @@ const traverseMod = require("@babel/traverse");
 const traverse = traverseMod.default || traverseMod;
 
 const FILES = process.argv.slice(2);
-const TARGETS = FILES.length ? FILES : ["src/FoodCostApp.jsx"];
+// ต้องตรวจทุกไฟล์ที่รันจริง ไม่ใช่แค่ตัวแอป
+// 9 ก.ย. 69: ตัวพิมพ์ v35 อ้างตัวแปร meta ที่ไม่มีอยู่จริง ปุ่มพิมพ์ซ้ำเลยตายเงียบทั้งวัน
+// ตัวตรวจนี้จับได้ตั้งแต่แรกถ้าถูกชี้มาที่ไฟล์นั้น (ลองแล้ว ชี้บรรทัดได้เป๊ะ) — มันแค่ไม่เคยถูกชี้
+const TARGETS = FILES.length ? FILES : [
+  "src/FoodCostApp.jsx",
+  "public/print-agent.js",
+  ...fs.readdirSync("api").filter(f => f.endsWith(".js")).map(f => "api/" + f),
+];
 
 // ชื่อที่มาจากเบราว์เซอร์/ภาษา — ไม่ได้ประกาศในไฟล์แต่เรียกใช้ได้จริง
 const GLOBALS = new Set([
