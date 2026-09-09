@@ -170,6 +170,31 @@ const zoomLock = (() => {
 })();
 const bootListeners = (t) => zoomLock.reg.filter(r => r.t === t && r.phase === "boot" && !r.removed);
 
+// ── ดึงตัวแบ่งหน้าตัวจริงมารันกับ sb ปลอมที่จำลองเพดาน 1000 แถวของ PostgREST ──
+// PostgREST คืนสูงสุด 1000 แถวโดยไม่บอกอะไรเลย — ไม่ error ไม่เตือน แค่ได้ไม่ครบ
+// วัตถุดิบตอนนี้ 931 รายการ อีก 69 รายการจะเริ่มหาย = สต๊อกและต้นทุนคิดจากของไม่ครบ
+// เคยเกิดกับตารางสินทรัพย์มาแล้วจริง (1,383 แถว) จึงต้องมีด่านที่รันจริง ไม่ใช่ค้นข้อความ
+const sbAllWith = (totalRows) => {
+  const st = APP.indexOf("async function sbAll(");
+  if (st < 0) throw new Error("ไม่เจอ sbAll");
+  let d = 0, started = false, en = -1;
+  for (let i = st; i < APP.length; i++) {
+    if (APP[i] === "{") { d++; started = true; }
+    else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+  }
+  const calls = [];
+  // sb ปลอม: อ่าน limit/offset จาก path แล้วตัดที่ 1000 แถวเหมือนของจริงเป๊ะ
+  const sb = async (path) => {
+    calls.push(path);
+    const lim = Math.min(+(/limit=(\d+)/.exec(path) || [])[1] || 1000, 1000);
+    const off = +(/offset=(\d+)/.exec(path) || [])[1] || 0;
+    if (totalRows === "พัง") return { code: "PGRST", message: "ล่ม" };
+    return Array.from({ length: Math.max(0, Math.min(lim, totalRows - off)) }, (_, i) => ({ id: off + i }));
+  };
+  const fn = new Function("sb", APP.slice(st, en) + " return sbAll;")(sb);
+  return { fn, calls };
+};
+
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
 const ck = (label, got, want) => {
@@ -664,6 +689,45 @@ const guards = [
   ["hover ของการ์ดเมนูจำกัดเฉพาะเครื่องที่มีเมาส์จริง",
     APP.includes("@media(hover:hover){.mcard:hover{")],
   ["แตะแล้วต้องเห็นว่าติด (ตอบสนองด้วย CSS ไม่ใช่ JS)", APP.includes(".mcard:active{")],
+  // ── เพดาน 1000 แถวของ PostgREST (ตัดเงียบ ไม่มี error) ──
+  ["ข้อมูลเกิน 1000 แถวต้องได้ครบ ไม่ใช่ได้แค่ 1000", await (async () => {
+    const { fn } = sbAllWith(2500);
+    return (await fn("ingredients?order=id.asc")).length === 2500;
+  })()],
+  ["ครบพอดี 1000 แถวก็ต้องได้ 1000 และต้องหยุด ไม่วนไม่รู้จบ", await (async () => {
+    const { fn, calls } = sbAllWith(1000);
+    const r = await fn("ingredients?order=id.asc");
+    return r.length === 1000 && calls.length === 2;   // หน้าแรกเต็ม → ขอต่ออีกหน้า ได้ว่าง → จบ
+  })()],
+  ["ต่ำกว่าเพดานยิงครั้งเดียวพอ ไม่ยิงเผื่อ", await (async () => {
+    const { fn, calls } = sbAllWith(931);
+    return (await fn("ingredients?order=id.asc")).length === 931 && calls.length === 1;
+  })()],
+  ["ไม่มีข้อมูลเลยต้องได้อาเรย์ว่าง ไม่ใช่พัง", await (async () => {
+    const { fn } = sbAllWith(0);
+    const r = await fn("ingredients?order=id.asc");
+    return Array.isArray(r) && r.length === 0;
+  })()],
+  ["ฐานข้อมูลตอบผิดรูปต้องไม่ทำทั้งจอล้ม", await (async () => {
+    try { const { fn } = sbAllWith("พัง"); return Array.isArray(await fn("ingredients?order=id.asc")); }
+    catch { return false; }
+  })()],
+  ["ไม่มีแถวไหนซ้ำหรือหายระหว่างต่อหน้า", await (async () => {
+    const { fn } = sbAllWith(2500);
+    const r = await fn("ingredients?order=id.asc");
+    return new Set(r.map(x => x.id)).size === 2500 && r[0].id === 0 && r[2499].id === 2499;
+  })()],
+  // ตารางที่โตทางเดียวต้องดึงแบบแบ่งหน้า — ถ้าใครเผลอเปลี่ยนกลับเป็น sb() ตรงๆ จะแดงทันที
+  ["วัตถุดิบดึงแบบแบ่งหน้า", APP.includes('getIngs: () => sbAll("ingredients?order=id.asc")')],
+  ["เมนูดึงแบบแบ่งหน้า", APP.includes('getMenus: () => sbAll("menus?order=id.asc")')],
+  ["เมนูหน้าลูกค้าดึงแบบแบ่งหน้า", APP.includes('getMenusPublic: () => sbAll("menus?select=')],
+  ["สินทรัพย์ยังดึงแบบแบ่งหน้าอยู่", APP.includes('getAssets: () => sbAll("assets?order=id.desc")')],
+  // แบ่งหน้าโดยไม่เรียงลำดับ = ลำดับไม่คงที่ ข้อมูลข้ามหน้าซ้ำบ้างหายบ้าง
+  ["ทุกจุดที่แบ่งหน้าต้องสั่งเรียงลำดับด้วย",
+    APP.split("sbAll(").slice(1).filter(seg => !seg.startsWith("pathNoRange")).every(seg => /order=/.test(seg.slice(0, 220)))],   // ข้ามตัวนิยามฟังก์ชันเอง เอาเฉพาะจุดที่เรียกใช้
+  // ออกรหัสจากรายการที่อ่านมาไม่ครบ = รหัสซ้ำกับวัตถุดิบที่มีอยู่แล้ว
+  ["ตัวออกรหัสอ่านรหัสเดิมครบทุกหน้า",
+    APP.includes("sbAll(`ingredients?select=code") && APP.includes("&order=code.asc")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

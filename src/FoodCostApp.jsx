@@ -338,14 +338,14 @@ async function freshVisibleBranches(table, id) {
 }
 
 const api = {
-  getIngs: () => sb(`ingredients?order=id.asc`),
+  getIngs: () => sbAll("ingredients?order=id.asc"),   // แบ่งหน้า — 931/1000 แล้ว อีก 69 รายการจะหายเงียบ
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
   updateIng: (id, d) => sb(`ingredients?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteIng: (id) => sb(`ingredients?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
-  getMenus: () => sb(`menus?order=id.asc`),
+  getMenus: () => sbAll("menus?order=id.asc"),   // แบ่งหน้าไว้ก่อน — โตทางเดียว เพดานเดียวกับวัตถุดิบ
   // หน้าลูกค้าเป็นหน้าสาธารณะ — ห้ามส่ง ingredients/sop (สูตรอาหาร) ออกไป
   // และเอาเฉพาะฟิลด์ที่หน้านั้นใช้จริง: 315 KB -> 78 KB ต่อครั้ง
-  getMenusPublic: () => sb(`menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&price=gt.0&order=id.asc`),
+  getMenusPublic: () => sbAll("menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&price=gt.0&order=id.asc"),
   // ระหว่างมื้อ สิ่งเดียวที่เปลี่ยนคือ "วันนี้หมด/ซ่อน" — 12 KB พอ
   getMenuAvail: () => sb(`menus?select=id,availability&price=gt.0`),
   addMenu: (d) => sb("menus", { method: "POST", body: JSON.stringify(d) }),
@@ -1215,7 +1215,7 @@ const fmtIngCode=(prefix,num)=>`${prefix}-${String(num).padStart(5,"0")}`;
 // Next code for a prefix, reading the current max straight from the DB (fresh, avoids a stale
 // page cache). Throws on network failure so callers can fall back to their local list.
 async function nextIngCodeForPrefix(prefix){
-  const rows=await sb(`ingredients?select=code&code=like.${prefix}-*`);
+  const rows=await sbAll(`ingredients?select=code&code=like.${prefix}-*&order=code.asc`);
   return fmtIngCode(prefix,maxIngCodeNum(prefix,rows)+1);
 }
 // Recipe amounts are stored CANONICALLY in grams (amountGram) because every cost path multiplies
