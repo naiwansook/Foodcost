@@ -1513,6 +1513,20 @@ const printFailsOf=(printers)=>{
 // กติกาเดียวกับ ingVisibleAt — null = เปิดหมด · [] = ปิดหมด · [ids] = เฉพาะที่ระบุ
 // เดิม [] แปลว่า "เปิดหมด" ทำให้ไม่มีทางสั่ง "ปิดทุกสาขา" ได้เลย และการติ๊กออก
 // จนหมดกลายเป็นเปิดให้ทุกสาขาแทน (บั๊คที่เจอ 27/08/2569)
+// เครื่องไหนจะได้พิมพ์เมนูนี้ — ต้องตรงกับ printerHandles ใน public/print-agent.js เป๊ะๆ
+// ถ้าสองที่นี้คิดไม่เหมือนกัน จอจะบอกว่ามีเครื่องรับ แต่ของจริงไม่มีใบออกมา (หรือกลับกัน)
+// กติกา: ปักหมุดเมนู (printer_id) → เครื่องนั้นเครื่องเดียว ไม่มีทางสำรอง
+//        ไม่ปักหมุด → เครื่องที่ categories เป็น null รับทุกหมวด · ไม่งั้นต้องมีชื่อหมวดนั้นในลิสต์
+const printersForMenu=(m,printers)=>{
+  const act=(printers||[]).filter(p=>p&&p.active!==false);
+  if(m&&m.printer_id!=null&&m.printer_id!=="")return act.filter(p=>+p.id===+m.printer_id);
+  const c=menuCatOf(m);
+  return act.filter(p=>{
+    if(p.categories===null||p.categories===undefined)return true;
+    if(!Array.isArray(p.categories)||c==null)return false;
+    return p.categories.some(x=>String(x).trim()===c);
+  });
+};
 const menuVisibleAt=(m,bid)=>{
   const vb=m&&m.visible_branches;
   if(vb==null||!Array.isArray(vb))return true;
@@ -21898,6 +21912,20 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const branchCategories=useMemo(()=>{const s=new Set();branchMenus.forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort(thCmp);},[branchMenus]);
   // .filter() คืนอาร์เรย์ใหม่อยู่แล้ว .sort() ตรงนี้จึงไม่ไปสลับลำดับ menus ตัวจริง
   const menusInCat=(c)=>branchMenus.filter(m=>effCat(m)===c).sort((a,b)=>thCmp(a.name,b.name));
+  // สรุปว่า "หมวดนี้ออกเครื่องไหน" จากค่าที่ตั้งไว้จริง — หมวดที่ไม่มีเครื่องรับต้องเด้งขึ้นบนสุด
+  const routing=useMemo(()=>{
+    const byCat=new Map();
+    for(const m of branchMenus){
+      const c=effCat(m);if(!c)continue;
+      if(!byCat.has(c))byCat.set(c,{cat:c,n:0,dead:0,set:new Set()});
+      const r=byCat.get(c);r.n++;
+      const hit=printersForMenu(m,printers);
+      if(hit.length)hit.forEach(p=>r.set.add(p.name));else r.dead++;
+    }
+    return [...byCat.values()].map(r=>({...r,names:[...r.set]}))
+      .sort((a,b)=>(b.dead>0?1:0)-(a.dead>0?1:0)||thCmp(a.cat,b.cat));
+  },[branchMenus,printers]);
+  const deadCount=routing.reduce((s,r)=>s+r.dead,0);
   function openSettings(p){
     setSettingsP(p);setSName(p.name||"");
     // เครื่องเก่าที่เก็บ categories=null คือ "รับทุกหมวด" อยู่เดิม — เปิดมาให้ติ๊กครบทุกหมวด
@@ -21947,6 +21975,33 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <button onClick={()=>testPrint(p)} title="พิมพ์หน้าทดสอบจริง — ยืนยันชัวร์ที่สุด" style={{background:C.brand,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.white,whiteSpace:"nowrap"}}>🧾 ทดสอบพิมพ์</button>
           <button onClick={async()=>{if(await confirmDlg({title:`🗑 นำเครื่องพิมพ์ "${p.name}" ออก?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากการใช้งาน?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะเพิ่มกลับ\n\n💡 นำกลับมาได้ทุกเมื่อด้วยปุ่ม "ค้นหาเครื่องพิมพ์"`,confirmLabel:"นำออก",cancelLabel:"ยกเลิก",danger:true})){try{await api.updatePrinter(p.id,{active:false,description:JSON.stringify({d:1,ig:1})});await load();posToast("นำเครื่องพิมพ์ออกแล้ว — กด \"ค้นหาเครื่องพิมพ์\" เพื่อนำกลับ");}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}}} title="นำเครื่องพิมพ์ออก (นำกลับได้ด้วยปุ่มค้นหา)" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>
         </div>;})}
+      </div>}
+      {/* ── หมวดไหนออกเครื่องไหน ──────────────────────────────────────────
+          ตอบคำถาม "ทำไมเมนูนี้ไม่ออก" ได้ในจอเดียว โดยไม่ต้องไล่เปิดทีละเครื่อง
+          เหตุจริง 9 ก.ย. 69: เจ้าของแจ้ง "น้ำเปล่าปริ้นไม่ออก" — ของจริงคือหมวด "น้ำ"
+          ถูกตั้งให้ออกเครื่องแคชเชียร์เครื่องเดียว ใบจึงไปโผล่อีกที่ ครัวไม่มีทางรู้
+          และถ้าไม่มีเครื่องไหนรับหมวดนั้นเลย ใบจะเงียบหายไปโดยไม่มีข้อความเตือนที่ไหน */}
+      {routing.length>0&&<div style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+          <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🧭 หมวดไหนออกเครื่องไหน</div>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ตามที่ตั้งไว้จริงในตอนนี้ · เฉพาะเมนูที่สาขานี้ขาย</div>
+        </div>
+        {deadCount>0&&<div style={{marginBottom:8,padding:"10px 12px",borderRadius:10,background:C.redLight,border:`1px solid ${C.red}55`,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.red}}>⚠️ {deadCount} เมนู ไม่มีเครื่องพิมพ์รับเลย — สั่งเข้ามาแล้วจะไม่มีใบออกที่ไหนทั้งนั้น</div>
+          <div style={{fontSize:11,color:C.red,marginTop:3,opacity:.9}}>กด "กำหนดการพิมพ์" ที่เครื่องที่ต้องการ แล้วติ๊กหมวดที่ขึ้นสีแดงด้านล่าง</div>
+        </div>}
+        <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:"34vh",overflowY:"auto",paddingRight:2}}>
+          {routing.map(r=><div key={r.cat} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 11px",borderRadius:9,flexWrap:"wrap",
+            background:r.dead?C.redLight:C.bg,border:`1px solid ${r.dead?C.red+"44":C.line}`}}>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:r.dead?C.red:C.ink,minWidth:0}}>{r.cat}</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4}}>{r.n} เมนู</span>
+            <span style={{marginLeft:"auto",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700,color:r.dead?C.red:C.ink3,textAlign:"right"}}>
+              {r.dead
+                ? (r.names.length ? `❌ ${r.dead} เมนูไม่มีเครื่องรับ · ที่เหลือออก ${r.names.join(", ")}` : "❌ ไม่มีเครื่องรับ")
+                : `→ ${r.names.join(", ")}`}
+            </span>
+          </div>)}
+        </div>
       </div>}
       {settingsP&&<Modal title={`🖨️ กำหนดการพิมพ์ — ${settingsP.name}`} onClose={()=>setSettingsP(null)} extraWide>
         <label style={lbl}>ชื่อเครื่องพิมพ์ (แก้ไขได้)</label>

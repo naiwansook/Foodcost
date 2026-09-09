@@ -1141,6 +1141,79 @@ section("หมวดหมู่ตรงกันทุกจอ");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// "หมวดไหนออกเครื่องไหน" ที่จอบอก ต้องตรงกับที่ตัวพิมพ์ทำจริง
+// เหตุจริง 9 ก.ย. 69: เจ้าของแจ้ง "น้ำเปล่าปริ้นไม่ออก" แล้วไม่มีจอไหนในระบบบอกได้เลย
+// ว่าหมวด "น้ำ" ถูกตั้งให้ออกเครื่องแคชเชียร์เครื่องเดียว ต้องไปไล่เปิดทีละเครื่องเอง
+// จอใหม่สรุปให้ — แต่ถ้ามันคิดคนละแบบกับตัวพิมพ์ ก็จะโกหกหน้าตาย ตรงนี้จึงเทียบสองตัวจริง
+// ══════════════════════════════════════════════════════════════════════════
+section("จอบอกว่าออกเครื่องไหน = ที่ตัวพิมพ์ทำจริง");
+{
+  const app = new Function(grabConst(APP, "menuCatOf") + "\n" + grabConst(APP, "printersForMenu") + "\nreturn printersForMenu;")();
+  const st = AGENT.indexOf("function printerHandles(");
+  if (st < 0) throw new Error("ไม่เจอ printerHandles ในตัวพิมพ์");
+  let d = 0, en = -1;
+  for (let j = AGENT.indexOf("{", st); j < AGENT.length; j++) {
+    if (AGENT[j] === "{") d++;
+    else if (AGENT[j] === "}") { d--; if (d === 0) { en = j + 1; break; } }
+  }
+  const agent = new Function(AGENT.slice(st, en) + "\nreturn printerHandles;")();
+
+  const P = [
+    { id: 10, name: "จานเดียว", active: true, categories: ["อาหารจานเดียว", "ของทอด"] },
+    { id: 11, name: "เซตหมู", active: true, categories: ["หมูกระทะ", " ของทอด "] },
+    { id: 12, name: "แคชเชียร์", active: true, categories: ["น้ำ"] },
+    { id: 13, name: "เครื่องเก่า", active: false, categories: ["น้ำ"] },
+    { id: 14, name: "รับทุกหมวด", active: true, categories: null },
+  ];
+  const noAll = P.filter(p => p.id !== 14);            // ชุดที่ไม่มีเครื่องรับทุกหมวด (ของจริงทุกสาขาเป็นแบบนี้)
+  const names = (arr) => arr.map(p => p.name);
+
+  ck("ไม่ปักหมุด → ทุกเครื่องที่ติ๊กหมวดนั้น",
+    names(app({ id: 1, category: "ของทอด", printer_id: null }, noAll)), ["จานเดียว", "เซตหมู"]);
+  ck("ชื่อหมวดมีช่องว่างหน้าหลังก็ต้องเจอ (ตัวพิมพ์ trim เหมือนกัน)",
+    names(app({ id: 2, category: "ของทอด", printer_id: null }, [P[1]])), ["เซตหมู"]);
+  ck("น้ำเปล่า (หมวด น้ำ) ออกเครื่องแคชเชียร์เครื่องเดียว — เคสจริงที่เจ้าของถาม",
+    names(app({ id: 3, category: "น้ำ", printer_id: null }, noAll)), ["แคชเชียร์"]);
+  ck("เครื่องที่ปิดใช้งานไม่ถูกนับว่ารับ", names(app({ id: 4, category: "น้ำ", printer_id: 13 }, noAll)), []);
+  ck("ปักหมุดแล้วออกเครื่องนั้นเครื่องเดียว ไม่ตกไปหาหมวด",
+    names(app({ id: 5, category: "ของทอด", printer_id: 12 }, noAll)), ["แคชเชียร์"]);
+  ck("ปักหมุดไปเครื่องที่ไม่มีในสาขานี้ = ไม่มีเครื่องรับ (ไม่มีทางสำรอง)",
+    names(app({ id: 6, category: "ของทอด", printer_id: 99 }, noAll)), []);
+  ck("ยังไม่จัดหมวด + ทุกเครื่องติ๊กหมวดไว้ = ไม่มีเครื่องรับ",
+    names(app({ id: 7, category: "", printer_id: null }, noAll)), []);
+  ck("มีเครื่องรับทุกหมวด (categories=null) รับหมดแม้เมนูยังไม่จัดหมวด",
+    names(app({ id: 8, category: "", printer_id: null }, [P[4]])), ["รับทุกหมวด"]);
+
+  // ตัวตัดสินจริง: ทุกคู่ (เมนู × เครื่อง) จอกับตัวพิมพ์ต้องตอบเหมือนกันหมด
+  const MENUS = [
+    { id: 1, category: "ของทอด", printer_id: null }, { id: 2, category: "น้ำ", printer_id: null },
+    { id: 3, category: "หมูกระทะ", printer_id: null }, { id: 4, category: "ไม่มีใครรับ", printer_id: null },
+    { id: 5, category: "", printer_id: null }, { id: 6, category: null, printer_id: null },
+    { id: 7, category: "ของทอด", printer_id: 12 }, { id: 8, category: "ของทอด", printer_id: 99 },
+    { id: 9, category: "ของทอด", printer_id: "11" }, { id: 10, category: " ของทอด ", printer_id: null },
+  ];
+  let same = 0, diff = [];
+  for (const sets of [P, noAll]) {
+    const act = sets.filter(p => p.active !== false);
+    for (const m of MENUS) {
+      const mine = new Set(app(m, sets).map(p => p.id));
+      for (const p of act) {
+        const theirs = agent(p, { printer_id: m.printer_id, category: m.category });
+        if (mine.has(p.id) === !!theirs) same++;
+        else diff.push(`เมนู ${m.id} × เครื่อง ${p.id}: จอ=${mine.has(p.id)} ตัวพิมพ์=${!!theirs}`);
+      }
+    }
+  }
+  ck(`จอกับตัวพิมพ์ตอบตรงกันทุกคู่ (${same} คู่)`, diff, []);
+
+  ok_("จอสถานะเครื่องพิมพ์สรุปให้เห็นว่าหมวดไหนออกเครื่องไหน",
+    APP.includes("🧭 หมวดไหนออกเครื่องไหน") && APP.includes("const routing=useMemo(()=>{"));
+  ok_("เมนูที่ไม่มีเครื่องรับต้องเด้งขึ้นบนสุดและขึ้นสีแดง",
+    APP.includes("(b.dead>0?1:0)-(a.dead>0?1:0)") && APP.includes("ไม่มีเครื่องพิมพ์รับเลย"));
+  ok_("จอใช้ตัวเดียวกับที่ตรวจแล้วว่าตรงกับตัวพิมพ์", APP.includes("const hit=printersForMenu(m,printers);"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // หมวดของเครื่องพิมพ์ต้องเป็นหมวด "ของสาขานั้น"
 // เหตุจริง 9 ก.ย. 69: เครื่อง "เซตหมู" สาขา 8 ติ๊กหมวดของสาขา 5/6 ไว้ 9 หมวด
 // เพราะจอกวาดหมวดจากเมนูทั้งเครือ แล้วปุ่ม "เลือกทั้งหมด" ติ๊กติดไปหมด
