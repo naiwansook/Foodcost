@@ -216,6 +216,37 @@ const driftRe = (() => {
   return new Function(ln + " return IGNORE_DRIFT;")();
 })();
 
+// ── ดึงตรรกะการเลือกตัวเลือกเมนูตัวจริงมารัน ─────────────────────────────
+// กลุ่ม "บังคับเลือก" เดิมล็อกไว้ที่ 1 อย่างเสมอ · เซตที่ให้เลือก 2 เตาจึงทำไม่ได้
+// ร้านต้องไปเขียนบอกในชื่อกลุ่มแทน แล้วระบบก็ยังบังคับแค่ 1 = ลูกค้าจ่ายค่าสองเตาได้เตาเดียว
+// ตรงนี้พลาดแล้วลูกค้าได้ของไม่ครบตามที่จ่าย จึงต้องรันจริง ไม่ใช่ค้นข้อความ
+const optPick = (() => {
+  const head = "function pick(g,c){setSel(s=>{";
+  const st = APP.indexOf(head);
+  if (st < 0) throw new Error("ไม่เจอตัวเลือกตัวเลือกเมนู (pick)");
+  let d = 0, started = false, en = -1;
+  for (let i = st + head.length - 1; i < APP.length; i++) {
+    if (APP[i] === "{") { d++; started = true; }
+    else if (APP[i] === "}") { d--; if (started && d === 0) { en = i; break; } }
+  }
+  const body = APP.slice(st + head.length, en);
+  const needLn = APP.split("\n").find(l => l.includes("const needOf=(g)=>"));
+  if (!needLn) throw new Error("ไม่เจอ needOf");
+  return new Function("s", "g", "c", needLn.trim() + " " + body)
+;
+})();
+const needOfFn = (() => {
+  const ln = APP.split("\n").find(l => l.includes("const needOf=(g)=>"));
+  return new Function("g", ln.trim() + " return needOf(g);");
+})();
+// กดเลือกทีละใบตามลำดับ แล้วดูว่าเหลือติ๊กอะไรบ้าง
+const tap = (g, ids) => {
+  let sel = {};
+  for (const id of ids) sel = optPick(sel, g, g.choices.find(x => x.id === id));
+  return g.choices.filter(x => sel[x.id]).map(x => x.id);
+};
+const G = (n, req, pick) => ({ required: req, pick, choices: Array.from({ length: n }, (_, i) => ({ id: "c" + (i + 1) })) });
+
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
 const ck = (label, got, want) => {
@@ -805,6 +836,27 @@ const guards = [
     APP.includes("api.updatePOSTable(id,{active:false})") && APP.includes("โต๊ะนี้มีประวัติการขาย")],
   ["ถามก่อนซ่อน ไม่ตัดสินใจแทน", APP.includes('confirmLabel:"ซ่อนออกจากผัง"')],
   ["ผังโต๊ะยังกรองเฉพาะโต๊ะที่เปิดใช้อยู่", APP.includes("active=eq.true")],
+  // ── กลุ่มตัวเลือกที่บังคับเลือกหลายอย่าง (เซต 2 เตา) ──
+  ["ไม่เคยตั้งจำนวน = บังคับ 1 เหมือนเดิมทุกประการ", needOfFn(G(3, true, undefined)) === 1],
+  ["บังคับ 1 → เลือกใบที่สองแทนที่ใบแรก (แบบวิทยุ)", tap(G(3, true, 1), ["c1", "c2"]).join() === "c2"],
+  ["บังคับ 2 → เลือกได้สองใบพร้อมกัน", tap(G(3, true, 2), ["c1", "c2"]).join() === "c1,c2"],
+  // ครบแล้วกดใบใหม่ ต้องได้ใบใหม่ ไม่ใช่กดไม่ติดเฉยๆ (ลูกค้าจะนึกว่าจอค้างแล้วกดรัว)
+  ["บังคับ 2 → ครบแล้วกดใบที่สาม ใบเก่าสุดหลุดออก", tap(G(3, true, 2), ["c1", "c2", "c3"]).join() === "c2,c3"],
+  ["กดซ้ำที่ใบเดิม = เอาออกได้เสมอ", tap(G(3, true, 2), ["c1", "c2", "c1"]).join() === "c2"],
+  ["ไม่บังคับ = เลือกกี่อย่างก็ได้ ไม่มีเพดาน", tap(G(4, false, 1), ["c1", "c2", "c3", "c4"]).length === 4],
+  // ตั้งไว้ 5 แต่มีตัวเลือก 3 = ลูกค้าเลือกครบไม่ได้ กดสั่งไม่ได้ทั้งเมนู
+  ["ตั้งจำนวนเกินตัวเลือกที่มี ต้องหั่นลงมาให้สั่งได้", needOfFn(G(3, true, 5)) === 3],
+  ["ตั้ง 0 หรือค่าติดลบ ต้องกลับเป็น 1", needOfFn(G(3, true, 0)) === 1 && needOfFn(G(3, true, -2)) === 1],
+  // ปุ่มสั่งต้องปลดล็อกเมื่อครบพอดี ไม่ใช่แค่เลือกอะไรก็ได้สักอย่าง
+  ["ต้องเลือกครบตามจำนวนถึงจะสั่งได้", APP.includes("const missingRequired=grps.some(g=>g.required&&countIn(g)!==needOf(g));")],
+  ["ป้ายบอกจำนวนที่ต้องเลือกตามค่าจริง", APP.includes("* บังคับ · เลือก {needOf(g)}")],
+  ["มีตัวนับความคืบหน้าให้เห็นว่าเลือกไปกี่อย่าง", APP.includes("เลือกแล้ว {countIn(g)}/{needOf(g)}")],
+  // ตั้งค่าได้ทั้งตอนสร้างและตอนแก้ ไม่งั้นกลุ่มเก่าปรับไม่ได้
+  ["ฟอร์มสร้างกลุ่มมีช่องกรอกจำนวน", APP.includes("ต้องเลือกกี่อย่าง") && APP.includes("setGPick(")],
+  ["ฟอร์มแก้กลุ่มมีช่องกรอกจำนวน", APP.includes("setEg(s=>({...s,pick:")],
+  ["บันทึกจำนวนลงกลุ่มจริงทั้งสร้างและแก้",
+    APP.includes("pick:gReq?Math.max(1,+gPick||1):1") && APP.includes("pick:eg.required?Math.max(1,+eg.pick||1):1")],
+  ["เตือนเมื่อตั้งจำนวนเกินตัวเลือกที่มี", APP.includes("ลูกค้าจะสั่งไม่ได้")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

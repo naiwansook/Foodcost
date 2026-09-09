@@ -18170,7 +18170,7 @@ function optionsText(opts){return (opts||[]).map(o=>o&&o.name).filter(Boolean).j
 
 // Shared option picker (GROUP-based) — staff (POSOrderPanel) + customer scan
 // (CustomerPage). `groups` = [{id,name,required,choices:[{id,name,price}]}].
-// Required group = pick exactly one (radio); optional = pick any (checkbox).
+// Required group = pick exactly g.pick choices (default 1); optional = pick any (checkbox).
 // onConfirm gets the flat chosen choices [{name,price}].
 function MenuOptionPicker({menu,groups,onConfirm,onClose}){
   const[sel,setSel]=useState({});  // choiceId -> true
@@ -18179,20 +18179,37 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
   const grps=(groups||[]).filter(g=>g&&Array.isArray(g.choices)&&g.choices.length);
   const chosen=grps.flatMap(g=>g.choices.filter(c=>sel[c.id]).map(c=>({name:c.name,price:+c.price||0})));
   const total=base+chosen.reduce((s,o)=>s+(+o.price||0),0);
-  const missingRequired=grps.some(g=>g.required&&!g.choices.some(c=>sel[c.id]));
-  function pick(g,c){setSel(s=>{const n={...s};if(g.required){g.choices.forEach(x=>{delete n[x.id];});n[c.id]=true;}else{if(n[c.id])delete n[c.id];else n[c.id]=true;}return n;});}
+  // ต้องเลือกกี่อย่างในกลุ่มนี้ — ไม่เคยตั้งไว้ = 1 (กลุ่มเดิมทุกกลุ่มทำงานเหมือนเดิม)
+  // จำกัดไม่ให้เกินจำนวนตัวเลือกที่มีจริง กันตั้งเลข 5 ในกลุ่มที่มี 3 ตัวเลือกแล้วสั่งไม่ได้เลย
+  const needOf=(g)=>Math.max(1,Math.min(+g.pick||1,(g.choices||[]).length));
+  const countIn=(g)=>g.choices.filter(c=>sel[c.id]).length;
+  const missingRequired=grps.some(g=>g.required&&countIn(g)!==needOf(g));
+  function pick(g,c){setSel(s=>{
+    const n={...s};
+    if(!g.required){ if(n[c.id])delete n[c.id];else n[c.id]=true; return n; }
+    const need=needOf(g);
+    if(n[c.id]){ delete n[c.id]; return n; }                       // กดซ้ำ = เอาออก ทำได้เสมอ
+    if(need===1){ g.choices.forEach(x=>{delete n[x.id];}); n[c.id]=true; return n; }
+    // เลือกหลายอย่าง: ครบจำนวนแล้วให้ตัวใหม่แทนตัวที่เลือกไว้นานสุด
+    // (ปล่อยให้กดไม่ติดเฉยๆ ลูกค้าจะนึกว่าจอค้าง แล้วกดรัวจนหงุดหงิด)
+    const on=g.choices.filter(x=>n[x.id]);
+    if(on.length>=need)delete n[on[0].id];
+    n[c.id]=true;
+    return n;
+  });}
   return <Modal title={`เลือกตัวเลือก — ${menu.name}`} onClose={onClose}>
     <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,marginBottom:12}}>ราคาเริ่มต้น ฿{base.toLocaleString()}</div>
     <div style={{display:"flex",flexDirection:"column",gap:14,maxHeight:"52vh",overflowY:"auto",marginBottom:14}}>
-      {grps.map(g=>{const picked=g.choices.some(c=>sel[c.id]);const need=g.required&&!picked;return <div key={g.id}>
+      {grps.map(g=>{const need=g.required&&countIn(g)!==needOf(g);return <div key={g.id}>
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{g.name}</span>
-          {g.required?<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:7,padding:"2px 8px"}}>* บังคับ · เลือก 1</span>:<span style={{fontSize:10.5,fontWeight:700,color:C.ink4,background:C.bg,borderRadius:7,padding:"2px 8px"}}>เลือกได้หลายอย่าง</span>}
-          {need&&<span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>⚠️ ยังไม่เลือก</span>}
+          {g.required?<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:7,padding:"2px 8px"}}>* บังคับ · เลือก {needOf(g)}</span>:<span style={{fontSize:10.5,fontWeight:700,color:C.ink4,background:C.bg,borderRadius:7,padding:"2px 8px"}}>เลือกได้หลายอย่าง</span>}
+          {g.required&&needOf(g)>1&&<span style={{fontSize:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",color:countIn(g)===needOf(g)?C.green:C.ink3}}>เลือกแล้ว {countIn(g)}/{needOf(g)}</span>}
+          {need&&<span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>⚠️ {countIn(g)===0?"ยังไม่เลือก":`ยังขาดอีก ${needOf(g)-countIn(g)}`}</span>}
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {g.choices.map(c=>{const on=!!sel[c.id];const p=+c.price||0;return <label key={c.id} onClick={()=>pick(g,c)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:11,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`,transition:"all .12s"}}>
-            <span style={{width:18,height:18,flexShrink:0,borderRadius:g.required?"50%":5,border:`2px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,display:"flex",alignItems:"center",justifyContent:"center"}}>{on&&<span style={{width:8,height:8,borderRadius:g.required?"50%":2,background:C.white}}/>}</span>
+            <span style={{width:18,height:18,flexShrink:0,borderRadius:(g.required&&needOf(g)===1)?"50%":5,border:`2px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,display:"flex",alignItems:"center",justifyContent:"center"}}>{on&&<span style={{width:8,height:8,borderRadius:(g.required&&needOf(g)===1)?"50%":2,background:C.white}}/>}</span>
             <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{c.name}</span>
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:p>0?C.brand:C.ink4}}>{p>0?`+฿${p.toLocaleString()}`:"ฟรี"}</span>
           </label>;})}
@@ -18200,7 +18217,7 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
       </div>;})}
       {grps.length===0&&<div style={{padding:20,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>เมนูนี้ยังไม่มีตัวเลือก</div>}
     </div>
-    {missingRequired&&<div style={{fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:10,textAlign:"center"}}>⚠️ กรุณาเลือกกลุ่มที่บังคับ (*) ให้ครบก่อน</div>}
+    {missingRequired&&<div style={{fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:10,textAlign:"center"}}>⚠️ กรุณาเลือกกลุ่มที่บังคับ (*) ให้ครบตามจำนวนก่อน</div>}
     <div style={{display:"flex",gap:10,alignItems:"center",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
       {/* ปุ่มเพิ่ม-ลดจำนวน */}
       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
@@ -20706,15 +20723,15 @@ function POSOptionLibrary({currentBranch,onClose}){
   const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[settings,setSettings]=useState(null);const[lib,setLib]=useState([]);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(false);
-  const[gName,setGName]=useState("");const[gReq,setGReq]=useState(false);
+  const[gName,setGName]=useState("");const[gReq,setGReq]=useState(false);const[gPick,setGPick]=useState(1);   // บังคับเลือกกี่อย่างในกลุ่มนี้
   const[ci,setCi]=useState({});                 // {groupId:{name,price}}
   const[editG,setEditG]=useState(null);const[eg,setEg]=useState({name:"",required:false});
   async function load(){setLoading(true);try{const ps=await api.getPOSSettings(currentBranch.id);const s=ps&&ps[0]?ps[0]:{branch_id:currentBranch.id};setSettings(s);setLib(Array.isArray(s.option_library)?s.option_library:[]);}catch(e){console.error("optLib",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   async function persist(next){setBusy(true);try{const payload={...(settings||{}),branch_id:currentBranch.id,option_library:next};await api.upsertPOSSettings(payload);setSettings(payload);setLib(next);return true;}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}finally{setBusy(false);}}
-  async function addGroup(){const name=gName.trim();if(!name)return alert("ใส่ชื่อกลุ่มตัวเลือก");if(lib.some(g=>g.name===name))return alert("มีกลุ่มนี้แล้ว");if(await persist([...lib,{id:`g_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,required:gReq,choices:[]}])){setGName("");setGReq(false);}}
+  async function addGroup(){const name=gName.trim();if(!name)return alert("ใส่ชื่อกลุ่มตัวเลือก");if(lib.some(g=>g.name===name))return alert("มีกลุ่มนี้แล้ว");if(await persist([...lib,{id:`g_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,required:gReq,pick:gReq?Math.max(1,+gPick||1):1,choices:[]}])){setGName("");setGReq(false);setGPick(1);}}
   async function delGroup(g){if(!await confirmDlg({title:"ลบกลุ่มตัวเลือก",message:`ลบกลุ่ม "${g.name}" และตัวเลือกย่อยทั้งหมด?`}))return;await persist(lib.filter(x=>x.id!==g.id));}
-  async function saveEditG(){const name=(eg.name||"").trim();if(!name)return;if(await persist(lib.map(g=>g.id===editG?{...g,name,required:!!eg.required}:g)))setEditG(null);}
+  async function saveEditG(){const name=(eg.name||"").trim();if(!name)return;if(await persist(lib.map(g=>g.id===editG?{...g,name,required:!!eg.required,pick:eg.required?Math.max(1,+eg.pick||1):1}:g)))setEditG(null);}
   async function addChoice(g){const f=ci[g.id]||{};const name=(f.name||"").trim();const price=+f.price||0;if(!name)return alert("ใส่ชื่อตัวเลือกย่อย");const next=lib.map(x=>x.id===g.id?{...x,choices:[...(x.choices||[]),{id:`c_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price}]}:x);if(await persist(next))setCi(s=>({...s,[g.id]:{name:"",price:""}}));}
   async function delChoice(g,cid){await persist(lib.map(x=>x.id===g.id?{...x,choices:(x.choices||[]).filter(c=>c.id!==cid)}:x));}
   return <Modal title="➕ ตัวเลือกในเมนู (กลุ่ม add-on)" onClose={onClose} extraWide>
@@ -20722,7 +20739,8 @@ function POSOptionLibrary({currentBranch,onClose}){
       {/* Add group */}
       <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:14,flexWrap:"wrap",background:C.bg,borderRadius:10,padding:"10px 12px",border:`1px dashed ${C.line}`}}>
         <div style={{flex:"2 1 160px"}}><label style={lbl}>ชื่อกลุ่มตัวเลือก</label><input value={gName} onChange={e=>setGName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addGroup()} placeholder="เช่น ขนาด, ระดับเผ็ด" style={iS}/></div>
-        <div style={{flex:"0 0 auto"}}><label style={lbl}>การเลือก</label><div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับเลือก"}].map(o=><button key={String(o.v)} onClick={()=>setGReq(o.v)} style={{padding:"8px 12px",borderRadius:8,border:`2px solid ${gReq===o.v?(o.v?C.red:C.green):C.line}`,background:gReq===o.v?(o.v?C.redLight:C.greenLight):C.white,color:gReq===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{o.l}</button>)}</div></div>
+        <div style={{flex:"0 0 auto"}}><label style={lbl}>การเลือก</label><div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับเลือก"}].map(o=><button key={String(o.v)} onClick={()=>{setGReq(o.v);if(!o.v)setGPick(1);}} style={{padding:"8px 12px",borderRadius:8,border:`2px solid ${gReq===o.v?(o.v?C.red:C.green):C.line}`,background:gReq===o.v?(o.v?C.redLight:C.greenLight):C.white,color:gReq===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{o.l}</button>)}</div></div>
+        {gReq&&<div style={{flex:"0 0 auto"}}><label style={lbl}>ต้องเลือกกี่อย่าง</label><input type="text" inputMode="numeric" value={gPick} onChange={e=>{const v=e.target.value.replace(/[^0-9]/g,"");setGPick(v===""?"":Math.min(20,+v||1));}} onBlur={()=>setGPick(p=>Math.max(1,+p||1))} style={{...iS,width:86,textAlign:"center",fontWeight:800}}/></div>}
         <Btn onClick={addGroup} loading={busy} icon={I.plus}>เพิ่มกลุ่ม</Btn>
       </div>
       {/* Groups */}
@@ -20732,15 +20750,17 @@ function POSOptionLibrary({currentBranch,onClose}){
           <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:C.bg,borderBottom:`1px solid ${C.line}`,flexWrap:"wrap"}}>
             {editG===g.id?<>
               <input value={eg.name} onChange={e=>setEg(s=>({...s,name:e.target.value}))} autoFocus style={{...iS,flex:"1 1 140px"}}/>
-              <div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับ"}].map(o=><button key={String(o.v)} onClick={()=>setEg(s=>({...s,required:o.v}))} style={{padding:"7px 11px",borderRadius:8,border:`2px solid ${eg.required===o.v?(o.v?C.red:C.green):C.line}`,background:eg.required===o.v?(o.v?C.redLight:C.greenLight):C.white,color:eg.required===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:11.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>)}</div>
+              <div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับ"}].map(o=><button key={String(o.v)} onClick={()=>setEg(s=>({...s,required:o.v,pick:o.v?(s.pick||1):1}))} style={{padding:"7px 11px",borderRadius:8,border:`2px solid ${eg.required===o.v?(o.v?C.red:C.green):C.line}`,background:eg.required===o.v?(o.v?C.redLight:C.greenLight):C.white,color:eg.required===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:11.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>)}</div>
+              {eg.required&&<label style={{display:"flex",alignItems:"center",gap:6,fontSize:11.5,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>ต้องเลือก<input type="text" inputMode="numeric" value={eg.pick??1} onChange={e=>{const v=e.target.value.replace(/[^0-9]/g,"");setEg(s=>({...s,pick:v===""?"":Math.min(20,+v||1)}));}} onBlur={()=>setEg(s=>({...s,pick:Math.max(1,+s.pick||1)}))} style={{...iS,width:62,textAlign:"center",fontWeight:800,padding:"7px 6px"}}/>อย่าง</label>}
               <Btn onClick={saveEditG} loading={busy} s={{padding:"6px 12px",fontSize:12}}>บันทึก</Btn>
               <Btn v="ghost" onClick={()=>setEditG(null)} s={{padding:"6px 12px",fontSize:12}}>ยกเลิก</Btn>
             </>:<>
               <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,color:C.ink}}>📦 {g.name}</span>
-              {g.required?<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px"}}>* บังคับเลือก</span>:<span style={{fontSize:10.5,fontWeight:700,color:C.ink4,background:C.white,borderRadius:8,padding:"2px 8px",border:`1px solid ${C.line}`}}>ไม่บังคับ</span>}
+              {g.required?<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px"}}>* บังคับเลือก {Math.max(1,+g.pick||1)} อย่าง</span>:<span style={{fontSize:10.5,fontWeight:700,color:C.ink4,background:C.white,borderRadius:8,padding:"2px 8px",border:`1px solid ${C.line}`}}>ไม่บังคับ</span>}
               <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>· {(g.choices||[]).length} ตัวเลือกย่อย</span>
+              {g.required&&Math.max(1,+g.pick||1)>(g.choices||[]).length&&<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px"}}>⚠️ ตั้งให้เลือก {Math.max(1,+g.pick||1)} แต่มีแค่ {(g.choices||[]).length} — ลูกค้าจะสั่งไม่ได้</span>}
               <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-                <button onClick={()=>{setEditG(g.id);setEg({name:g.name,required:!!g.required});}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้กลุ่ม</button>
+                <button onClick={()=>{setEditG(g.id);setEg({name:g.name,required:!!g.required,pick:Math.max(1,+g.pick||1)});}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้กลุ่ม</button>
                 <button onClick={()=>delGroup(g)} style={{background:C.redLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบกลุ่ม</button>
               </div>
             </>}
