@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 36;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 37;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -244,6 +244,7 @@ async function fetchSlipRaster(items, tableNum, meta) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ table: String(tableNum || ""), time: new Date().toLocaleString("th-TH"),
         bill: (meta && meta.bill != null) ? String(meta.bill) : "", by: (meta && meta.by) ? String(meta.by) : "",
+        kind: (meta && meta.kind) ? String(meta.kind) : "", from: (meta && meta.from) ? String(meta.from) : "",
         items: (items || []).map(it => ({ qty: it.qty, name: it.name, options: it.options || [], note: it.note || "" })) }),
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
@@ -381,7 +382,7 @@ async function handleReprintRequests(printers) {
       // คำสั่งก็ถูกกินไปแล้วจากบรรทัดบน (มาร์คก่อนส่ง) และ tick ทั้งรอบตายกลางทาง
       // = กดปุ่มพิมพ์ซ้ำแล้วเงียบสนิท ไม่มีอะไรเกิดขึ้น และออเดอร์ปกติในรอบนั้นก็ไม่ได้พิมพ์ด้วย
       try {
-        const { buf, mode } = await itemsToBuffer(its, rp.table || "-", { bill: rp.bill, by: rp.by });
+        const { buf, mode } = await itemsToBuffer(its, rp.table || "-", { bill: rp.bill, by: rp.by, kind: rp.kind, from: rp.from });
         await sendToPrinter(p.ip, p.port, buf);
         console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`);
       } catch (e) { console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`); }

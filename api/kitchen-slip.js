@@ -18,10 +18,20 @@ async function ensureFont(GlobalFonts) {
 }
 
 function buildLines(body) {
+  // ป้ายบอกชนิดใบ — ครัวต้องแยกออกทันทีว่าใบนี้ไม่ใช่ออเดอร์ใหม่
+  // พิมพ์ซ้ำแล้วครัวทำอีกจาน = ของทิ้งเปล่า · ย้ายโต๊ะแล้วเสิร์ฟที่เดิม = ลูกค้าไม่ได้กิน
+  // ห้ามใช้อีโมจิในข้อความที่พิมพ์ — ฟอนต์ Sarabun ไม่มีตัวนั้น จะออกมาเป็นกล่องสี่เหลี่ยม
+  const kind = String(body.kind || "");
+  const head = kind === "void" ? "แจ้งยกเลิกรายการ" : kind === "move" ? "แจ้งย้ายโต๊ะ" : "ใบสั่งอาหาร";
+  const mark = kind === "reprint" ? "พิมพ์ซ้ำ - ไม่ใช่ออเดอร์ใหม่"
+    : kind === "void" ? "ยกเลิกแล้ว - ไม่ต้องทำ"
+    : kind === "move" ? (body.from ? `ย้ายมาจากโต๊ะ ${body.from} - ไม่ต้องทำใหม่` : "ย้ายโต๊ะ - ไม่ต้องทำใหม่")
+    : "";
   const lines = [
-    { t: "ใบสั่งอาหาร", size: 28, bold: true, align: "center" },
+    { t: head, size: 28, bold: true, align: "center" },
     { t: String(body.table || ""), size: 76, bold: true, align: "center" },   // เบอร์โต๊ะตัวใหญ่มาก ครัวเห็นชัด
   ];
+  if (mark) lines.push({ t: mark, size: 26, bold: true, align: "center" });
   if (body.time) lines.push({ t: String(body.time), size: 20, align: "center" });
   // เลขบิลคือตัวอ้างอิงเดียวที่ตามกลับไปหาบิลในระบบได้ — ครัวถือกระดาษมาถามได้ตรงใบ
   // ผู้สั่งไว้ตรวจย้อนหลังตอนมีปัญหาว่าใครเป็นคนรับออเดอร์ หรือลูกค้าสแกนสั่งเอง

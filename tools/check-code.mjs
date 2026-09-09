@@ -395,7 +395,7 @@ const guards = [
   ["ตะกร้าลูกค้าว่าง ไม่ทับออเดอร์ที่ค้าง", APP.includes("if(!cart.length){")],
   ["บิลถูกปิดกลางทาง = แจ้ง ไม่แอบสร้างบิลใหม่", APP.includes('if(sawOpenBill)throw new Error("บิลของโต๊ะนี้เพิ่งถูกปิด')],
   ["เขียนบิลล็อกสถานะด้วย ไม่ใช่แค่ updated_at", APP.includes('&status=neq.paid&status=neq.cancelled`, { method:"PATCH"')],
-  ["ยกเลิกรายการ แจ้งครัว", APP.includes("❌ ยกเลิก: ${target.name}")],
+  ["ยกเลิกรายการ แจ้งครัว", APP.includes("name:`ยกเลิก: ${target.name}`")],
   // เดิมเคยบังคับว่า "รับทุกหมวด" ต้องเก็บเป็น null — เลิกใช้แล้ว (8 ก.ย. 69)
   // เจ้าของสั่งให้ตัดตัวเลือกนั้นทิ้ง ให้ติ๊กหมวดเป็นตัวตัดสินอย่างเดียว
   ["ปิดกะดึงบิลครบทั้งกะ (ไม่ตัดที่ 200)", APP.includes("api.getPOSOrdersSince(currentBranch.id,shift.opened_at)")],
@@ -1168,7 +1168,9 @@ section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเ�
     (APP.match(/<POSOrderPanel\b[^>]*>/g) || []).every(t => t.includes("printers={")));
   // ยกเลิกรายการต้องแจ้งครัวผ่านตัวพิมพ์ ไม่ใช่ยิงตรงจากเบราว์เซอร์ (https ยิงไม่ถึงอยู่แล้ว)
   ok_("ยกเลิกรายการแจ้งครัวผ่านตัวพิมพ์",
-    APP.includes('await agentReprint([{...target,qty:target.qty,name:`❌ ยกเลิก: ${target.name}`'));
+    APP.includes('await agentReprint([{...target,qty:target.qty,name:`ยกเลิก: ${target.name}`'));
+  // ฟอนต์ที่ใช้เรนเดอร์ใบครัวไม่มีอีโมจิ ใส่ไปจะออกมาเป็นกล่องสี่เหลี่ยมบนกระดาษ
+  ok_("ไม่มีอีโมจิในชื่อรายการที่ส่งไปพิมพ์", !APP.includes("name:`❌ ยกเลิก:"));
   ok_("ไม่เหลือการยิงตรงจากเบราว์เซอร์ในทางยกเลิกรายการ", (() => {
     const st = APP.indexOf("async function voidItem(idx){");
     if (st < 0) return false;
@@ -1184,6 +1186,76 @@ section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเ�
   // ใบพิมพ์ซ้ำต้องมีข้อมูลเท่าใบแรก ไม่งั้นครัวได้กระดาษที่อ้างอิงอะไรไม่ได้
   ok_("คำสั่งพิมพ์ซ้ำพกเลขบิลและผู้สั่งไปด้วย",
     APP.includes("bill:existingOrder?.id??null,by:currentUser?.username||null"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ใบครัวต้องบอกได้ว่าเป็นใบชนิดไหน + ย้ายโต๊ะ
+// เจ้าของสั่ง: "กดพิมพ์ซ้ำแล้วกระดาษต้องรีมาร์คไว้เล็กๆ ว่าเป็นเมนูที่พิมพ์ซ้ำ"
+// ถ้าไม่มีป้าย ครัวเห็นใบเดิมอีกใบก็ทำอีกจาน = ของทิ้งเปล่าทุกครั้งที่กดพิมพ์ซ้ำ
+// ══════════════════════════════════════════════════════════════════════════
+section("ใบครัว: ป้ายบอกชนิด + ย้ายโต๊ะ");
+{
+  // ดึงตัวสร้างบรรทัดตัวจริงจาก api/kitchen-slip.js มารัน — ค้นข้อความอย่างเดียวไม่พอ
+  const st = SLIP.indexOf("function buildLines(body) {");
+  if (st < 0) throw new Error("ไม่เจอ buildLines");
+  let d = 0, en = -1;
+  for (let j = SLIP.indexOf("{", st); j < SLIP.length; j++) {
+    if (SLIP[j] === "{") d++;
+    else if (SLIP[j] === "}") { d--; if (!d) { en = j + 1; break; } }
+  }
+  const buildLines = new Function(SLIP.slice(st, en) + "\nreturn buildLines;")();
+  const txt = (ls) => ls.map(l => l.t || l.c2 || "").join("\n");
+  const IT = [{ qty: 2, name: "หมูสไลด์", options: [], note: "" }];
+
+  const plain = buildLines({ table: "C7", items: IT });
+  ck("ออเดอร์ปกติไม่มีป้ายอะไรเพิ่ม", /พิมพ์ซ้ำ|ยกเลิกแล้ว|ย้ายมาจาก/.test(txt(plain)), false);
+  ck("ออเดอร์ปกติยังขึ้นหัวว่าใบสั่งอาหาร", plain[0].t, "ใบสั่งอาหาร");
+
+  const rep = buildLines({ table: "C7", kind: "reprint", items: IT });
+  ok_("ใบพิมพ์ซ้ำมีป้ายบอกว่าไม่ใช่ออเดอร์ใหม่", txt(rep).includes("พิมพ์ซ้ำ - ไม่ใช่ออเดอร์ใหม่"));
+  ck("ป้ายอยู่ใต้เบอร์โต๊ะ และตัวเล็กกว่าเบอร์โต๊ะ", rep[2].size < rep[1].size, true);
+  ck("เบอร์โต๊ะยังเป็นตัวใหญ่สุดบนใบ", Math.max(...rep.map(l => l.size || 0)), 76);
+  ok_("ยังพิมพ์รายการอาหารครบเหมือนเดิม", txt(rep).includes("หมูสไลด์"));
+
+  const vd = buildLines({ table: "C7", kind: "void", items: IT });
+  ck("ใบยกเลิกเปลี่ยนหัวใบให้อ่านออกทันที", vd[0].t, "แจ้งยกเลิกรายการ");
+  ok_("ใบยกเลิกบอกว่าไม่ต้องทำ", txt(vd).includes("ยกเลิกแล้ว - ไม่ต้องทำ"));
+
+  const mv = buildLines({ table: "C7", kind: "move", from: "A5", items: IT });
+  ck("ใบย้ายโต๊ะเปลี่ยนหัวใบ", mv[0].t, "แจ้งย้ายโต๊ะ");
+  ck("ใบย้ายโต๊ะโชว์เบอร์โต๊ะใหม่ตัวใหญ่", mv[1].t, "C7");
+  ok_("ใบย้ายโต๊ะบอกว่ามาจากโต๊ะไหน และห้ามทำใหม่", txt(mv).includes("ย้ายมาจากโต๊ะ A5 - ไม่ต้องทำใหม่"));
+  ok_("ไม่มีอีโมจิบนกระดาษ (ฟอนต์ใบครัวไม่มีตัวอีโมจิ)",
+    ![plain, rep, vd, mv].some(ls => /[\u{1F300}-\u{1FAFF}\u{2700}-\u{27BF}\u{2B00}-\u{2BFF}]/u.test(txt(ls))));
+
+  // ── ฝั่งตัวพิมพ์กับแอปต้องส่งชนิดใบมาให้จริง ──
+  ok_("ตัวพิมพ์ส่งชนิดใบและโต๊ะเดิมไปกับคำขอเรนเดอร์",
+    AGENT.includes('kind: (meta && meta.kind) ? String(meta.kind) : "", from: (meta && meta.from) ? String(meta.from) : "",')
+    && AGENT.includes("kind: rp.kind, from: rp.from"));
+  ok_("ปุ่มพิมพ์ซ้ำบอกชนิดว่าเป็นการพิมพ์ซ้ำ", APP.includes('kind:o.kind||"reprint"'));
+  ok_("ทางยกเลิกรายการบอกชนิดว่าเป็นการยกเลิก", APP.includes('{kind:"void",okMsg:'));
+
+  // ── ย้ายโต๊ะ ──
+  // ย้ายผิดกติกาแปลว่าบิลสองใบมาชนกันที่โต๊ะเดียว หรือยอดขายถูกนับซ้ำ
+  ok_("มีหน้าต่างย้ายโต๊ะ", APP.includes("function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClose,onDone}){"));
+  ok_("ปุ่มย้ายโต๊ะขึ้นเฉพาะโต๊ะที่มีบิลอยู่", APP.includes("{selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})}"));
+  ok_("เลือกได้เฉพาะโต๊ะที่ว่างจริง (ไม่มีบิลค้างอยู่)",
+    APP.includes("const taken=new Set((activeOrders||[]).map(o=>String(o.table_id)));")
+    && APP.includes("!taken.has(String(t.id))"));
+  ok_("ย้ายไปทับโต๊ะตัวเองไม่ได้", APP.includes('String(t.id)!==String(from.id)'));
+  ok_("โต๊ะที่ปิดใช้งานไม่ขึ้นให้เลือก", APP.includes("t.active!==false&&String(t.id)!==String(from.id)"));
+  // ลูกค้ากดสั่งเพิ่มจากมือถือพอดีตอนพนักงานกดย้าย = ต้องไม่เขียนทับของใหม่
+  ok_("ย้ายแบบกันชนกัน (เขียนต่อเมื่อยังไม่มีใครแก้)",
+    APP.includes("await api.updatePOSOrderIfUnchanged(order.id,order.updated_at,")
+    && APP.includes("{table_id:+t.id,table_number:t.table_number,updated_at:new Date().toISOString()}"));
+  ok_("ย้ายแล้วต้องแจ้งครัว ไม่งั้นเสิร์ฟไปโต๊ะเดิมที่มีลูกค้าใหม่นั่งแล้ว",
+    APP.includes('kind:"move",from:String(from.table_number)}'));
+  ok_("ใบแจ้งย้ายโต๊ะห้ามเงียบ — ไม่มีเครื่องรับหมวดไหนเลยก็ส่งไปทุกเครื่อง",
+    APP.includes("if(!ups.length&&fallbackAll&&usable.length){"));
+  ok_("แจ้งครัวไม่สำเร็จต้องบอกให้ไปบอกครัวเอง", APP.includes("แต่แจ้งครัวไม่สำเร็จ กรุณาบอกครัวด้วยตัวเอง"));
+  // โต๊ะเก่าว่างเองเพราะจอผังดูจากบิลที่ผูกอยู่ ไม่ใช่คอลัมน์ status
+  ok_("จอผังโต๊ะยังตัดสินว่าง/ไม่ว่างจากบิลที่ผูกอยู่",
+    APP.includes("function getTableOrder(tid){return activeOrders.find(o=>o.table_id===tid);}"));
 }
 
 // ══════════════════════════════════════════════════════════════════════════

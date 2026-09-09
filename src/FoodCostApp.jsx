@@ -17751,6 +17751,31 @@ function printerHandles(p,item){
   const c=String(item.category).trim();
   return p.categories.some(x=>String(x).trim()===c);
 }
+// ส่งคำสั่งพิมพ์ใบครัวผ่าน "ตัวพิมพ์ (agent)" — เส้นทางเดียวที่ยิงถึงเครื่องพิมพ์ในวง LAN ได้จริง
+// หน้าเว็บเป็น https จะยิง ESC/POS ไป 192.168.x.x ตรงๆ ไม่ได้ (mixed content) ต้องฝากคำสั่งให้ตัวพิมพ์ไปยิงแทน
+// แยกออกมาไว้ตรงนี้เพราะมีสามทางที่ต้องใช้: พิมพ์ซ้ำ · แจ้งยกเลิกรายการ · แจ้งย้ายโต๊ะ
+// fallbackAll = ถ้าไม่มีเครื่องไหนรับหมวดของรายการเลย ให้ส่งไปทุกเครื่อง
+//   (ใช้กับใบแจ้งย้ายโต๊ะ ซึ่งเงียบไม่ได้ — ครัวจะเสิร์ฟไปโต๊ะเดิมที่มีลูกค้าใหม่นั่งอยู่)
+async function agentPrintItems(items,tableLabel,branchId,meta,fallbackAll){
+  let prs=[];
+  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
+  const usable=prs.filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  const list=items||[];
+  const ups=[];const sentItems=new Set();
+  for(const p of usable){
+    const mine=list.filter(it=>printerHandles(p,it));
+    if(!mine.length)continue;
+    ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:mine,table:tableLabel,...(meta||{})})}));
+    mine.forEach(it=>sentItems.add(it));
+  }
+  if(!ups.length&&fallbackAll&&usable.length){
+    const body=list.length?list:[{qty:1,name:"(ไม่มีรายการในบิล)"}];
+    for(const p of usable)ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:body,table:tableLabel,...(meta||{})})}));
+    sentItems.add("__all");
+  }
+  if(ups.length)await Promise.all(ups);
+  return {sent:sentItems.size,noPrinter:list.filter(it=>!usable.some(p=>printerHandles(p,it))).length};
+}
 // Concatenate several Uint8Arrays into one ESC/POS byte stream
 function _concatBytes(arrs){const len=arrs.reduce((a,b)=>a+b.length,0);const out=new Uint8Array(len);let off=0;for(const a of arrs){out.set(a,off);off+=a.length;}return out;}
 // Send raw ESC/POS bytes straight to an IP/network thermal printer (port 9100).
@@ -17877,6 +17902,71 @@ function tableDims(t){
   if(seats<=4)return{w:90,h:80};
   if(seats<=6)return{w:110,h:90};
   return{w:130,h:100};
+}
+// ── ย้ายโต๊ะ ────────────────────────────────────────────────────────────────
+// ลูกค้าขอเปลี่ยนโต๊ะระหว่างมื้อเป็นเรื่องปกติ ก่อนหน้านี้ทำได้ทางเดียวคือปิดบิลเก่า
+// แล้วเปิดใหม่ = ยอดขายซ้ำ ประวัติขาด และครัวไม่รู้ว่าของที่กำลังทำต้องไปโต๊ะไหน
+// ย้ายจริงคือย้าย "บิลทั้งใบ" ไปผูกกับโต๊ะใหม่ — โต๊ะเก่าจะว่างเองทันที
+// เพราะจอผังโต๊ะดูว่าง/ไม่ว่างจากการที่มีบิลที่ยังไม่ปิดผูกอยู่หรือเปล่า (getTableOrder)
+// เลือกได้เฉพาะโต๊ะที่ว่างจริง — ถ้าปล่อยให้ย้ายไปทับโต๊ะที่มีคนนั่ง บิลสองใบจะชนกันที่โต๊ะเดียว
+function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClose,onDone}){
+  const[q,setQ]=useState("");
+  const[busy,setBusy]=useState(false);
+  const taken=new Set((activeOrders||[]).map(o=>String(o.table_id)));
+  const free=(tables||[])
+    .filter(t=>t.active!==false&&String(t.id)!==String(from.id)&&!taken.has(String(t.id)))
+    .filter(t=>{const s=q.trim().toLowerCase();return !s||String(t.table_number||"").toLowerCase().includes(s)||String(t.label||"").toLowerCase().includes(s)||String(t.zone||"").toLowerCase().includes(s);})
+    .sort((a,b)=>thCmp(a.zone||"",b.zone||"")||thCmp(a.table_number,b.table_number));
+  const nItems=(order?.items||[]).reduce((s,i)=>s+(+i.qty||0),0);
+  const total=(order?.items||[]).reduce((s,i)=>s+(+i.price||0)*(+i.qty||0),0);
+  async function doMove(t){
+    if(busy)return;
+    if(!await confirmDlg({
+      title:`ย้ายโต๊ะ ${from.table_number} → ${t.table_number}?`,
+      message:`ทั้งบิลจะย้ายไปโต๊ะ ${t.table_number}${t.label?` (${t.label})`:""}\n${nItems} รายการ · ฿${total.toLocaleString()}\n\nโต๊ะ ${from.table_number} จะว่างทันที พร้อมรับลูกค้าใหม่\nระบบจะพิมพ์ใบแจ้งครัวให้ว่าของต้องไปโต๊ะใหม่`,
+      confirmLabel:"ย้ายโต๊ะ",cancelLabel:"ไม่ย้าย"}))return;
+    setBusy(true);
+    try{
+      // เขียนแบบ "ถ้ายังไม่มีใครแก้" — กันเคสลูกค้ากดสั่งเพิ่มจากมือถือพอดีตอนพนักงานกดย้าย
+      const row=await api.updatePOSOrderIfUnchanged(order.id,order.updated_at,
+        {table_id:+t.id,table_number:t.table_number,updated_at:new Date().toISOString()});
+      if(!row){alert("⚠️ บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม)\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ก่อนย้าย");setBusy(false);return;}
+      // ครัวต้องรู้ ไม่งั้นเสิร์ฟไปโต๊ะเดิมที่มีลูกค้าใหม่นั่งอยู่แล้ว
+      let sent=0;
+      try{
+        const r=await agentPrintItems((order.items||[]).map(i=>({...i})),String(t.table_number),branch?.id,
+          {bill:order.id,by:currentUser?.username||null,kind:"move",from:String(from.table_number)},true);
+        sent=r.sent;
+      }catch(err){console.warn("แจ้งครัวเรื่องย้ายโต๊ะไม่สำเร็จ",err);}
+      posToast(sent
+        ?`ย้ายไปโต๊ะ ${t.table_number} แล้ว — ใบแจ้งครัวจะออกใน ~5 วินาที`
+        :`ย้ายไปโต๊ะ ${t.table_number} แล้ว — แต่แจ้งครัวไม่สำเร็จ กรุณาบอกครัวด้วยตัวเอง`, sent?"ok":"warn");
+      onDone&&onDone();
+      onClose&&onClose();
+    }catch(e){alert("ย้ายโต๊ะไม่สำเร็จ: "+friendlyError(e));}
+    setBusy(false);
+  }
+  return <Modal title={`ย้ายโต๊ะ — จากโต๊ะ ${from.table_number}`} onClose={onClose}>
+    <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6}}>
+      ทั้งบิล <b style={{color:C.ink}}>{nItems} รายการ · ฿{total.toLocaleString()}</b> จะย้ายไปโต๊ะที่เลือก<br/>
+      โต๊ะ <b style={{color:C.ink}}>{from.table_number}</b> จะว่างทันที พร้อมรับลูกค้าใหม่
+    </div>
+    <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาโต๊ะ / โซน..." style={{...iS,marginBottom:10}}/>
+    {free.length===0
+      ?<div style={{textAlign:"center",padding:"26px 14px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13,lineHeight:1.7,background:C.bg,borderRadius:12}}>
+        {q.trim()?"ไม่พบโต๊ะที่ค้นหา":<>ไม่มีโต๊ะว่างให้ย้ายไปตอนนี้<br/><span style={{fontSize:11.5}}>ต้องปิดบิลโต๊ะปลายทางก่อน ถึงจะย้ายมาได้</span></>}
+      </div>
+      :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(104px,1fr))",gridAutoRows:"max-content",gap:8,maxHeight:"46vh",overflowY:"auto",padding:2}}>
+        {free.map(t=><button key={t.id} disabled={busy} onClick={()=>doMove(t)}
+          style={{padding:"11px 8px",borderRadius:11,border:`1.5px solid ${C.line}`,background:C.white,cursor:busy?"wait":"pointer",
+          fontFamily:"'Sarabun',sans-serif",display:"flex",flexDirection:"column",alignItems:"center",gap:2,opacity:busy?.6:1}}>
+          <span style={{fontSize:16,fontWeight:900,color:C.ink}}>{t.table_number}</span>
+          {t.label&&<span style={{fontSize:10.5,color:C.ink4,maxWidth:"100%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</span>}
+          {t.zone&&<span style={{fontSize:10,color:C.ink4}}>{t.zone}</span>}
+          <span style={{fontSize:10,fontWeight:800,color:C.green}}>ว่าง</span>
+        </button>)}
+      </div>}
+  </Modal>;
 }
 function POSTableMap({tables,activeOrders,zones=[],printers=[],onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable,onRenameZone,onDeleteZone}){
   const failMap=printFailsOf(printers);
@@ -18531,8 +18621,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
           // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
           try{
-            await agentReprint([{...target,qty:target.qty,name:`❌ ยกเลิก: ${target.name}`,note:`(ยกเลิกโดย ${currentUser?.username||"พนักงาน"})`}],
-              {okMsg:"❌ แจ้งครัวแล้วว่ายกเลิกรายการนี้ — ใบจะออกใน ~5 วินาที",
+            await agentReprint([{...target,qty:target.qty,name:`ยกเลิก: ${target.name}`,note:`(ยกเลิกโดย ${currentUser?.username||"พนักงาน"})`}],
+              {kind:"void",okMsg:"❌ แจ้งครัวแล้วว่ายกเลิกรายการนี้ — ใบจะออกใน ~5 วินาที",
                noneMsg:"⚠️ ยกเลิกในระบบแล้ว แต่เมนูนี้ไม่มีเครื่องพิมพ์รับ — กรุณาบอกครัวด้วยตัวเอง"});
           }catch(err){
             console.warn("แจ้งครัวเรื่องยกเลิกไม่สำเร็จ",err);
@@ -18546,20 +18636,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
   // พิมพ์ใบครัวซ้ำผ่าน "ตัวพิมพ์ (agent)" — ส่งไป "ทุกเครื่องที่ตั้งค่าให้รับหมวดนั้น" (ตรงตาม กำหนดการพิมพ์) ไม่ใช่เครื่องเดียว
   async function agentReprint(list,opts){
-    let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งแก้หมวด/เครื่องพิมพ์ในหน้าต่างตั้งค่า)
-    try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
-    const usable=(prs||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
-    const ups=[];const sentItems=new Set();
-    for(const p of usable){
-      const mine=(list||[]).filter(it=>printerHandles(p,it));
-      if(!mine.length)continue;
-      ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:mine,table:table.table_number,bill:existingOrder?.id??null,by:currentUser?.username||null})}));
-      mine.forEach(it=>sentItems.add(it));
-    }
-    const noPrinter=(list||[]).filter(it=>!usable.some(p=>printerHandles(p,it))).length;
-    try{if(ups.length)await Promise.all(ups);}catch(e){alert("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
-    const sent=sentItems.size;
     const o=opts||{};
+    let sent=0,noPrinter=0;
+    try{
+      const r=await agentPrintItems(list,table.table_number,branch?.id,
+        {bill:existingOrder?.id??null,by:currentUser?.username||null,kind:o.kind||"reprint"});
+      sent=r.sent;noPrinter=r.noPrinter;
+    }catch(e){alert("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
     if(sent&&noPrinter)posToast(`${o.okMsg||"🔁 ส่งพิมพ์ซ้ำแล้ว"} · อีก ${noPrinter} รายการยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
     else if(sent)posToast(o.okMsg||"🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
     else posToast(o.noneMsg||"⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
@@ -21540,6 +21623,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
 function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false,reloadPosSettings,refreshTick=0,reloadZones}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);
+  const[moveFrom,setMoveFrom]=useState(null);   // {table,order} ระหว่างเลือกโต๊ะปลายทาง
   const[loading,setLoading]=useState(true);
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
   const[showPrinters,setShowPrinters]=useState(false);
@@ -21720,11 +21804,14 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       {showOrders&&<SalesReportModal currentBranch={currentBranch} onClose={()=>setShowOrders(false)}/>}
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll({silent:true});}} wide noScroll>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10,flexShrink:0}}>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10,flexShrink:0,flexWrap:"wrap"}}>
+        {selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.blue}55`,background:C.blueLight,cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>🔀 ย้ายโต๊ะ</button>}
         <button onClick={()=>printTableQR(selTable,currentBranch,printers)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})} printers={printers}/>
     </Modal>}
+    {moveFrom&&<MoveTableModal from={moveFrom.table} order={moveFrom.order} tables={tables} activeOrders={activeOrders} branch={currentBranch} currentUser={currentUser}
+      onClose={()=>setMoveFrom(null)} onDone={()=>{setMoveFrom(null);setSelTable(null);setSelOrder(null);loadAll({silent:true});}}/>}
     {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation}/>}
     {showReceipt&&<ReceiptSettingsModal currentBranch={currentBranch} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}
   </div>;

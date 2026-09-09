@@ -449,8 +449,19 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("ไม่มีฟังก์ชันไหนใช้ meta โดยไม่ได้รับเข้ามา (" + (bad.length ? bad.join(", ") : "ผ่านทุกตัว") + ")", bad.length === 0);
 
   // ③ เรนเดอร์ล้มต้องไม่กลืนคำสั่งพร้อมทำให้ทั้งรอบตาย — ต้องอยู่ในกันชนเดียวกับการส่ง
-  ok_("พิมพ์ซ้ำ: เรนเดอร์อยู่ในกันชนเดียวกับการส่ง",
-    SRC.includes("        const { buf, mode } = await itemsToBuffer(its, rp.table || \"-\", { bill: rp.bill, by: rp.by });\n        await sendToPrinter(p.ip, p.port, buf);"));
+  // ดูโครงจริงแทนการเทียบข้อความเป๊ะๆ — ไม่งั้นพอเพิ่มข้อมูลที่ส่งไปกับใบ ด่านก็พังทั้งที่โค้ดถูก
+  // ที่ต้องยืนยันคือ "การเรนเดอร์เกิดหลัง try และก่อน sendToPrinter" เท่านั้น
+  ok_("พิมพ์ซ้ำ: เรนเดอร์อยู่ในกันชนเดียวกับการส่ง", (() => {
+    const h = grab("handleReprintRequests");
+    const t = h.indexOf("try {"), r = h.indexOf("itemsToBuffer("), sd = h.indexOf("sendToPrinter(");
+    return t >= 0 && r > t && sd > r;
+  })());
+  // ป้าย "พิมพ์ซ้ำ" บนกระดาษจะขึ้นได้ก็ต่อเมื่อชนิดใบเดินทางครบสามต่อ:
+  //   แอปเขียนลงคำสั่ง → ตัวพิมพ์ส่งต่อ → ตัวเรนเดอร์ได้รับ
+  // ขาดต่อไหนก็เงียบเหมือนเดิม ครัวเห็นใบซ้ำแล้วทำอีกจาน = ของทิ้งเปล่า
+  ok_("พิมพ์ซ้ำ: ส่งชนิดใบและโต๊ะเดิมต่อจากคำสั่งที่แอปฝากไว้", SRC.includes("kind: rp.kind, from: rp.from"));
+  ok_("พิมพ์ซ้ำ: ตัวเรนเดอร์ได้รับชนิดใบไปด้วย (ป้ายบนกระดาษถึงจะขึ้น)",
+    SRC.includes('kind: (meta && meta.kind) ? String(meta.kind) : ""') && SRC.includes('from: (meta && meta.from) ? String(meta.from) : ""'));
   ok_("พิมพ์ซ้ำ: ยังมาร์คก่อนส่งอยู่ (ห้ามตัวพิมพ์ลองพิมพ์ใหม่เอง)",
     SRC.includes("state.reprinted[p.id] = rp.at; saveState();"));
 }
