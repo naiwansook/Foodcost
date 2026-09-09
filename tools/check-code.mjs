@@ -699,7 +699,8 @@ const guards = [
   })()],
   ["รายงานยอดขายไม่นับบิลที่ยกเลิกเป็นรายได้",
     APP.includes("const rev=paid.reduce((s,o)=>s+(+o.total||0),0);")
-    && APP.includes('const paid=orders.filter(o=>o.status==="paid");')],
+    && APP.includes('const paid=all.filter(o=>o.status==="paid");')
+    && APP.includes('const cancelled=all.filter(o=>o.status==="cancelled");')],
   ["บิลเก่าที่ไม่มีบันทึกต้องบอกตรงๆ ว่าไม่มี ไม่ใช่เว้นว่าง",
     APP.includes("— ไม่มีบันทึก (ยกเลิกก่อนเปิดระบบบันทึก) —")],
   // ── จอสั่งอาหารค้างตอนลากนิ้ว/กดรัว (เจ้าของแจ้ง 8 ก.ย. 69) ──
@@ -905,6 +906,23 @@ const guards = [
   ["ลากอยู่ต้องไม่เผลอสั่งเปลี่ยนหมวดที่กรอง", APP.includes("onClick={()=>{if(!drag)setCat(v);}}")],
   ["บันทึกไม่สำเร็จต้องคืนลำดับเดิม ไม่ใช่ค้างที่ลำดับที่ยังไม่ได้บันทึก",
     APP.includes("catch(e){ setCatOrder(catOrder); alert(")],
+  // ── ประวัติการขาย: ต้องตามหาบิลเก่าเจอ และพิมพ์ซ้ำเป็น PDF ได้ ──
+  // เดิมเดินทีละวันอย่างเดียว ไม่มีค้นหา และหน้ารายละเอียดไม่มีปุ่มอะไรเลยนอกจากปุ่มย้อนกลับ
+  ["ดูย้อนหลังเป็นช่วงได้ ไม่ใช่ทีละวัน", APP.includes("const[span,setSpan]=useState(1);")],
+  ["ค้นหาบิลจากเลขบิล/โต๊ะ/เมนู/ยอดได้", APP.includes("const hit=(o)=>{") && APP.includes("const all=orders.filter(hit);")],
+  ["มีปุ่มพิมพ์ใบเสร็จย้อนหลัง", APP.includes("function printBill(){") && APP.includes("พิมพ์ใบเสร็จ / บันทึก PDF")],
+  // ต้องเปิดหน้าต่างพิมพ์ตรงจากการกด ถ้ามี await คั่น เบราว์เซอร์จะบล็อกเพราะไม่นับเป็นการกดของผู้ใช้
+  ["โหลดตั้งค่าใบเสร็จไว้ก่อน ไม่ใช่ตอนกดพิมพ์", APP.includes("const[cfg,setCfg]=useState(null);")],
+  ["ปุ่มพิมพ์ไม่มี await คั่นก่อนเปิดหน้าต่าง", (() => {
+    const i = APP.indexOf("function printBill(){");
+    if (i < 0) return false;
+    const seg = APP.slice(i, i + 340), p = seg.indexOf("printReceipt(");
+    return p > 0 && !seg.slice(0, p).includes("await ");
+  })()],
+  ["ใบเสร็จย้อนหลังใช้ข้อมูลของบิลใบนั้นจริง", APP.includes("printReceipt(o,o.table_number,branch?.name")],
+  ["เห็นทั้งคนรับออเดอร์และคนปิดบิล", APP.includes("รับออเดอร์โดย") && APP.includes("ปิดบิลโดย")],
+  ["ลูกค้าสแกนสั่งเองต้องอ่านออก ไม่ใช่คำว่า customer", APP.includes("ลูกค้าสแกนสั่งเอง")],
+  ["ดึงบิลย้อนหลังแบบแบ่งหน้า (ช่วงเดือนเกิน 1000 บิลได้)", APP.includes("getPOSOrdersByDay: (bid, startISO, endISO) => sbAll(")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

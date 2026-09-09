@@ -530,7 +530,7 @@ const api = {
     }
     return out;
   },
-  getPOSOrdersByDay: (bid, startISO, endISO) => sb(`orders?branch_id=eq.${bid}&created_at=gte.${encodeURIComponent(startISO)}&created_at=lt.${encodeURIComponent(endISO)}&order=created_at.desc`),
+  getPOSOrdersByDay: (bid, startISO, endISO) => sbAll(`orders?branch_id=eq.${bid}&created_at=gte.${encodeURIComponent(startISO)}&created_at=lt.${encodeURIComponent(endISO)}&order=created_at.desc`),
   // Printers
   getPrinters: (bid) => sb(`printers?order=id.asc${bid?`&branch_id=eq.${bid}`:"&branch_id=is.null"}`),
   getAllPrinters: () => sb(`printers?order=id.asc`),
@@ -21741,7 +21741,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
 // ══════════════════════════════════════════════════════
 // ── SALES REPORT (รายงานยอดขาย: เลือกวัน · ปิด/ยังไม่ปิดบิล · ดูแต่ละบิล) ─
 // ══════════════════════════════════════════════════════
-function BillDetailCard({order,onBack}){
+function BillDetailCard({order,branch=null,cfg=null,onBack}){
   const o=order;
   const items=o.items||[];
   const stL={pending:"รอยืนยัน",confirmed:"กำลังทำ",bill_requested:"เรียกบิล",paid:"ชำระแล้ว",cancelled:"ยกเลิก"};
@@ -21749,8 +21749,22 @@ function BillDetailCard({order,onBack}){
   const m=(n)=>"฿"+(+n||0).toLocaleString(undefined,{maximumFractionDigits:0});
   const paid=o.status==="paid";
   const Row=({l,v,c,big,plus})=><div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",fontSize:big?17:13,fontFamily:"'Sarabun',sans-serif",marginBottom:big?0:6,fontWeight:big?900:500,color:c||C.ink2}}><span>{l}</span><span style={{fontWeight:big?900:700,color:big?C.ink:(c||C.ink)}}>{plus||""}{v}</span></div>;
+  // ต้องเรียกตรงๆ จากการกดปุ่ม ห้ามมี await คั่น ไม่งั้นเบราว์เซอร์ถือว่าไม่ใช่การกดของผู้ใช้แล้วบล็อกหน้าต่าง
+  // (ตั้งค่าใบเสร็จจึงถูกโหลดไว้ตั้งแต่เปิดจอรายงาน ไม่ได้มาโหลดตอนกด)
+  function printBill(){
+    try{ printReceipt(o,o.table_number,branch?.name||"",cfg,{paid:o.status==="paid"}); }
+    catch(e){ alert("เปิดหน้าต่างพิมพ์ไม่สำเร็จ: "+friendlyError(e)); }
+  }
   return <div>
-    <button onClick={onBack} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12.5,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:14}}>← กลับไปรายการบิล</button>
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+      <button onClick={onBack} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12.5,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>← กลับไปรายการบิล</button>
+      <button onClick={printBill} style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:10,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,cursor:"pointer",fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",boxShadow:`0 6px 16px ${C.brand}44`}}>
+        <Ic d={I.print} s={15} c={C.white}/>พิมพ์ใบเสร็จ / บันทึก PDF
+      </button>
+    </div>
+    <div style={{maxWidth:460,margin:"0 auto 10px",fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",lineHeight:1.6}}>
+      กดแล้วเลือกปลายทางเป็น <b style={{color:C.ink3}}>“บันทึกเป็น PDF”</b> เพื่อเก็บไฟล์ หรือเลือกเครื่องพิมพ์เพื่อพิมพ์กระดาษ
+    </div>
     <div style={{maxWidth:460,margin:"0 auto",background:C.white,borderRadius:14,border:`1px solid ${C.line}`,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,0.04)"}}>
       <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
@@ -21767,7 +21781,10 @@ function BillDetailCard({order,onBack}){
           <div>เหตุผล: {o.cancel_reason||"— ไม่ได้ระบุ —"}</div>
         </div>
       </div>}
-      {paid&&o.paid_by&&<div style={{padding:"8px 18px",background:C.greenLight,borderBottom:`1px solid ${C.green}33`,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:"#0F6E56"}}>ปิดบิลโดย <b>{o.paid_by}</b></div>}
+      {(o.ordered_by||(paid&&o.paid_by))&&<div style={{padding:"8px 18px",background:paid?C.greenLight:C.bg,borderBottom:`1px solid ${paid?C.green+"33":C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:paid?"#0F6E56":C.ink3,display:"flex",gap:14,flexWrap:"wrap"}}>
+        {o.ordered_by&&<span>รับออเดอร์โดย <b>{o.ordered_by==="customer"?"ลูกค้าสแกนสั่งเอง":o.ordered_by}</b></span>}
+        {paid&&o.paid_by&&<span>ปิดบิลโดย <b>{o.paid_by}</b></span>}
+      </div>}
       <div style={{padding:"14px 18px"}}>
         {items.length===0?<div style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13,textAlign:"center",padding:"10px 0"}}>ไม่มีรายการอาหาร</div>:items.map((i,idx)=>{
           const disc=+i.item_discount||0;
@@ -21800,28 +21817,50 @@ function SalesReportModal({currentBranch,onClose}){
   const isoKey=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;  // machine key (ISO) — do NOT shadow the global BE fmtD
   const todayStr=isoKey(new Date());
   const[date,setDate]=useState(todayStr);
+  const[span,setSpan]=useState(1);               // ดูย้อนหลังกี่วันนับจากวันที่เลือก (1 = วันเดียว)
+  const[q,setQ]=useState("");                     // ค้นหา: เลขบิล · โต๊ะ · ชื่อเมนู · ยอด
   const[filter,setFilter]=useState("all");
   const[orders,setOrders]=useState([]);
   const[loading,setLoading]=useState(true);
   const[bill,setBill]=useState(null);
+  const[cfg,setCfg]=useState(null);               // ตั้งค่าใบเสร็จ — โหลดล่วงหน้าไว้เลย
   const aliveRef=useRef(true);
   useEffect(()=>()=>{aliveRef.current=false;},[]);
+  // โหลดตั้งค่าตั้งแต่เปิดจอ ไม่ใช่ตอนกดพิมพ์ — ถ้าไปโหลดตอนกด หน้าต่างพิมพ์จะเปิดหลัง await
+  // แล้วเบราว์เซอร์จะบล็อกเพราะไม่นับว่าเป็นการกดของผู้ใช้แล้ว
+  useEffect(()=>{let ok=true;(async()=>{
+    try{const r=await api.getPOSSettings(currentBranch.id);if(ok)setCfg((r&&r[0])||null);}catch{}
+  })();return()=>{ok=false;};},[currentBranch.id]);
   useEffect(()=>{
     let cancel=false;setLoading(true);setBill(null);
     (async()=>{
       try{
-        const start=new Date(date+"T00:00:00");const end=new Date(start.getTime()+86400000);
+        // ช่วงวันที่: นับถอยหลังจากวันที่เลือก เช่น 7 วัน = วันที่เลือกและ 6 วันก่อนหน้า
+        const end=new Date(date+"T00:00:00");end.setDate(end.getDate()+1);
+        const start=new Date(date+"T00:00:00");start.setDate(start.getDate()-(span-1));
         const o=await api.getPOSOrdersByDay(currentBranch.id,start.toISOString(),end.toISOString());
         if(!cancel&&aliveRef.current)setOrders(Array.isArray(o)?o:[]);
       }catch(e){if(!cancel&&aliveRef.current)setOrders([]);}
       if(!cancel&&aliveRef.current)setLoading(false);
     })();
     return()=>{cancel=true;};
-  },[date,currentBranch.id]);
+  },[date,span,currentBranch.id]);
 
-  const paid=orders.filter(o=>o.status==="paid");
-  const unpaid=orders.filter(o=>o.status!=="paid"&&o.status!=="cancelled");
-  const cancelled=orders.filter(o=>o.status==="cancelled");
+  // ค้นหาจากสิ่งที่คนจำได้จริงตอนตามหาบิลเก่า: เลขบิล เลขโต๊ะ ชื่อเมนูที่สั่ง หรือยอดเงิน
+  const hit=(o)=>{
+    const t=q.trim().toLowerCase();
+    if(!t)return true;
+    if(String(o.id).includes(t))return true;
+    if(String(o.table_number||"").toLowerCase().includes(t))return true;
+    if(String(Math.round(+o.total||0)).includes(t.replace(/[,฿\s]/g,"")))return true;
+    return (o.items||[]).some(i=>String(i&&i.name||"").toLowerCase().includes(t));
+  };
+  const all=orders.filter(hit);
+  const paid=all.filter(o=>o.status==="paid");
+  const unpaid=all.filter(o=>o.status!=="paid"&&o.status!=="cancelled");
+  const cancelled=all.filter(o=>o.status==="cancelled");
+  const discTotal=paid.reduce((s,o)=>s+(+o.discount||0)+(+o.promo_amount||0),0);
+  const lostTotal=cancelled.reduce((s,o)=>s+(+o.total||0),0);
   const rev=paid.reduce((s,o)=>s+(+o.total||0),0);
   const avg=paid.length?rev/paid.length:0;
   const payBreak=Object.entries(paid.reduce((mm,o)=>{const k=o.payment_method||"other";if(!mm[k])mm[k]={sum:0,n:0};mm[k].sum+=(+o.total||0);mm[k].n+=1;return mm;},{})).sort((a,b)=>b[1].sum-a[1].sum);
@@ -21844,15 +21883,31 @@ function SalesReportModal({currentBranch,onClose}){
       <input type="date" value={date} max={todayStr} onChange={e=>e.target.value&&setDate(e.target.value)} style={{padding:"8px 11px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:13,fontFamily:"'Sarabun',sans-serif",color:C.ink,background:C.white}}/>
       <button onClick={()=>shiftDay(1)} disabled={isToday} style={{...navBtn,opacity:isToday?.4:1,cursor:isToday?"default":"pointer"}} title="วันถัดไป">▶</button>
       {!isToday&&<button onClick={()=>setDate(todayStr)} style={{padding:"8px 13px",borderRadius:9,border:`1px solid ${C.brand}`,background:`${C.brand}12`,color:C.brand,cursor:"pointer",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>วันนี้</button>}
-      <span style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{fmtD(date)}{isToday?" · วันนี้":""}</span>
+      <span style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{span>1?`ย้อนหลัง ${span} วัน ถึง ${fmtD(date)}`:`${fmtD(date)}${isToday?" · วันนี้":""}`}</span>
+    </div>
+
+    {/* ── ช่วงเวลา + ค้นหา ── */}
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:5}}>
+        {[{v:1,l:"วันเดียว"},{v:7,l:"7 วัน"},{v:30,l:"30 วัน"}].map(o=>{const on=span===o.v;
+          return <button key={o.v} onClick={()=>setSpan(o.v)} style={{padding:"7px 13px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:12.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>;})}
+      </div>
+      <div style={{position:"relative",flex:"1 1 240px",minWidth:200}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหา: เลขบิล · โต๊ะ · ชื่อเมนู · ยอดเงิน"
+          style={{width:"100%",padding:"8px 30px 8px 12px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:13,fontFamily:"'Sarabun',sans-serif",color:C.ink}}/>
+        {q&&<button onClick={()=>setQ("")} title="ล้างคำค้น" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",border:"none",background:"transparent",cursor:"pointer",color:C.ink4,fontSize:15,lineHeight:1}}>×</button>}
+      </div>
+      {q&&<span style={{fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>เจอ {all.length} บิล จาก {orders.length}</span>}
     </div>
 
     {loading?<div style={{padding:"40px 0"}}><Loading text="กำลังโหลดรายงาน..."/></div>
-    :bill?<BillDetailCard order={bill} onBack={()=>setBill(null)}/>
+    :bill?<BillDetailCard order={bill} branch={currentBranch} cfg={cfg} onBack={()=>setBill(null)}/>
     :<>
       {/* ── สรุปยอด ── */}
       <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
         {[{l:"💰 ยอดขาย (ปิดบิลแล้ว)",v:`฿${m(rev)}`,c:C.green},
+          ...(discTotal>0?[{l:"🎁 ส่วนลดที่ให้ไป",v:`฿${m(discTotal)}`,c:C.purple}]:[]),
+          ...(lostTotal>0?[{l:"🗑️ มูลค่าบิลที่ยกเลิก",v:`฿${m(lostTotal)}`,c:C.red}]:[]),
           {l:"🧾 บิลปิดแล้ว",v:paid.length,c:C.blue},
           {l:"⏳ ยังไม่ปิดบิล",v:unpaid.length,c:C.yellow},
           {l:"📈 เฉลี่ย/บิล",v:`฿${m(avg)}`,c:C.brand}].map(s=><div key={s.l} style={{flex:"1 1 140px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}><div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:20,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
