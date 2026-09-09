@@ -1190,6 +1190,50 @@ section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเ�
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// ผลตรวจโค้ดหลายมุม 9 ก.ย. 69 — 11 ข้อที่ยืนยันแล้วว่าเป็นบั๊คจริง (แก้แล้วทั้งหมด)
+// ทั้งหมดเป็นเรื่องเงินและเอกสารที่ยื่นให้ลูกค้า จึงต้องมีด่านกันไม่ให้กลับมาอีก
+// ══════════════════════════════════════════════════════════════════════════
+section("ผลตรวจเส้นทางเงิน: 11 ข้อที่ต้องไม่กลับมา");
+{
+  // ── ใบเสร็จต้องบวกลงตัวทุกทาง ──
+  // ทางพิมพ์มีสองเส้น: ตัวพิมพ์ (raster) กับหน้าต่างพิมพ์ (HTML) — เดิมใส่บรรทัดปัดเศษแค่เส้นเดียว
+  ok_("ใบเสร็จตอนปิดบิลพกส่วนต่างการปัดไปด้วย", APP.includes("total,round_adj:roundAdj,payment_method:payMethod,cash_received:cashReceived"));
+  ok_("ใบทางหน้าต่างพิมพ์มีบรรทัดปัดเศษด้วย",
+    APP.includes("const roundLine=order.round_adj?") && APP.includes("${promoLine}${scLine}${vatLine}${roundLine}<div style="));
+  // ปุ่มพิมพ์ใบเสร็จย้อนหลังในรายงานก็เดินทางนี้ และส่งแถวจาก DB ที่มี round_adj อยู่แล้ว
+  ok_("พิมพ์ใบเสร็จย้อนหลังก็ได้บรรทัดปัดเศษ (ใช้ตัวเดียวกัน)", APP.includes("printReceipt(o,o.table_number,branch?.name"));
+  // ใบแบ่งจ่ายรวมกันต้องได้เท่ายอดที่เก็บจริง ไม่ใช่ยอดก่อนปัด
+  ok_("ใบแบ่งจ่ายเฉลี่ยส่วนต่างการปัดตามสัดส่วน",
+    APP.includes("const splitAdj=round2((+roundAdj||0)*ratio);") && APP.includes("total:splitTotal,round_adj:splitAdj,"));
+
+  // ── ส่วนลดรายเมนูต้องเกาะเมนูของมัน ไม่ใช่เกาะเลขลำดับแถว ──
+  // ยกเลิกแถวกลางบิล แถวหลังเลื่อนขึ้นมารับส่วนลดของแถวที่ถูกลบ = ของแถมกลายเป็นของขาย
+  ok_("ส่วนลดรายเมนูผูกกับ line_uid ไม่ใช่เลขลำดับ",
+    APP.includes("const discKey=(it,idx)=>String((it&&it.line_uid)||(\"#\"+idx));")
+    && APP.split("itemDisc[discKey(").length - 1 >= 3
+    && !APP.includes("const d=itemDisc[idx];"));
+  ok_("ช่องกรอกส่วนลดรายเมนูก็เขียนด้วย line_uid", APP.includes("setItemDisc(p=>({...p,[discKey(it,idx)]:"));
+  // ล็อกยอดแล้วแต่ช่องส่วนลดรายเมนูยังพิมพ์ได้ = ล็อกไม่จริง
+  ok_("ล็อกยอดแล้วช่องส่วนลดรายเมนูต้องกดไม่ได้",
+    APP.includes("<select disabled={payWait} value={d?.t||\"percent\"}") && APP.includes("<NumInput disabled={payWait} value={d?.v||\"\"}"));
+
+  // ── กันจอที่ถือภาพเก่าไปทับของที่เครื่องอื่นเพิ่งเพิ่ม ──
+  // ยกเลิกรอชำระเดิมไม่มีตัวกันชน แต่เอา updated_at ใหม่ไปใส่ verRef = ผ่านด่านของการเขียนครั้งถัดไป
+  ok_("ยกเลิกรอชำระมีตัวกันชนเหมือนตอนล็อก",
+    APP.includes("clearPayWaiting: async (id, seen) => {")
+    && APP.includes("const r = await sb(`orders?id=eq.${id}&updated_at=${guard}&status=eq.awaiting_payment`,"));
+  ok_("ยกเลิกไม่ผ่านกันชนต้องบอกให้เปิดโต๊ะใหม่ ไม่ใช่เดินต่อ",
+    APP.includes("const row=await api.clearPayWaiting(existingOrder.id,verRef.current);")
+    && APP.includes("if(!row){alert(\"⚠️ ยกเลิกไม่สำเร็จ"));
+
+  // ── มือถือลูกค้าต้องเห็นเลขเดียวกับที่ต้องจ่าย ──
+  ok_("ล็อกยอดแล้วมือถือลูกค้าโชว์ยอดบน QR ใบนั้น",
+    APP.includes('if(myOrder&&myOrder.status==="awaiting_payment"&&lock&&lock.total!=null)due=+lock.total;'));
+  ok_("สรุปยอดบนมือถือมีบรรทัดปัดเศษ/บอกว่าล็อกแล้ว",
+    APP.includes("custBill.locked") && APP.includes("custBill.roundAdj!==0&&<div"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // ปัดเศษท้ายบิล — เจ้าของสั่ง 9 ก.ย. 69: เลือกได้ว่าปัดขึ้นหรือปัดลง
 // ให้ยอดที่ลูกค้าจ่ายเป็นจำนวนเต็ม ไม่มีทศนิยม
 // เงินคือเรื่องที่ผิดไม่ได้ — ต้องดึงตัวปัดจริงมาปัดจริงแล้วดูผล ไม่ใช่ค้นข้อความ
@@ -1223,7 +1267,7 @@ section("ปัดเศษท้ายบิล");
   ok_("บิลที่ปิดเก็บส่วนต่างการปัดลงฐานข้อมูล", APP.includes("total,round_adj:roundAdj,payment_method:payMethod"));
   ok_("ใบแจ้งยอด/QR ก็พกส่วนต่างไปด้วย", APP.includes("promo_name:selectedPromo?.name||null,round_adj:roundAdj,"));
   // ยอดบนมือถือลูกค้ากับยอดที่พนักงานเก็บ ต้องเป็นเลขเดียวกัน
-  ok_("หน้าลูกค้าสแกนเห็นยอดที่ปัดแล้วเหมือนกัน", APP.includes("const due=roundBill(rawDue,roundModeOf(posCfg));"));
+  ok_("หน้าลูกค้าสแกนเห็นยอดที่ปัดแล้วเหมือนกัน", APP.includes("let due=roundBill(rawDue,roundModeOf(posCfg));"));
   ok_("มีช่องให้เลือกปัดขึ้น/ปัดลง/ไม่ปัด ในจอจัดการใบเสร็จ",
     APP.includes('🪙 ปัดเศษท้ายบิล') && APP.includes('{v:"up",l:"ปัดขึ้น"') && APP.includes('{v:"down",l:"ปัดลง"') && APP.includes('{v:"none",l:"ไม่ปัด"'));
 }
@@ -1301,7 +1345,10 @@ ok_("ด่านชุดรอชำระเงินรันจนจบ", 
   // ถูกปฏิเสธเพราะรอชำระ ≠ เน็ตสะดุด ห้ามวนส่งใหม่ และห้ามทำของในตะกร้าหาย
   ok_("โดนปฏิเสธแล้วเลิกวนส่ง และคืนของกลับตะกร้า",
     APP.includes("if(e&&e.awaitingPayment){") && APP.includes("setCart(p=>[...sending,...p]);")
-    && APP.includes("writeOutbox(null);setOutbox(null);setPayWaitMsg(true);loadMyOrder();"));
+    && APP.includes("if(back.length)setCart(p=>[...back,...p]);"));
+  // คิวออฟไลน์คือรายการที่เซิร์ฟเวอร์ยังไม่เคยได้รับ — ทิ้งไปคือออเดอร์ลูกค้าหายเงียบ
+  ok_("คิวออฟไลน์โดนปฏิเสธก็ต้องคืนของ ไม่ใช่ลบทิ้ง",
+    APP.includes("const back=(o&&Array.isArray(o.lines))?o.lines:[];"));
 
   // ── โต๊ะเปลี่ยนสี ──
   ok_("ผังโต๊ะมีสถานะรอชำระเงินเป็นสีของตัวเอง",

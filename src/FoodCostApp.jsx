@@ -575,8 +575,11 @@ const api = {
   // ปลดล็อกเฉพาะสถานะ — เก็บ pay_lock ไว้ต่อโดยตั้งใจ
   // QR พร้อมเพย์ผูกกับ "ยอดเงิน" ไม่ได้ผูกกับโต๊ะ ใบเดิมที่ลูกค้าถืออยู่จึงยังจ่ายได้ถ้ายอดไม่เปลี่ยน
   // เก็บยอดที่พิมพ์ไปไว้ ระบบจะได้เฝ้าให้ว่ายังตรงอยู่ไหม แล้วเตือนถ้าไม่ตรงแล้ว
-  clearPayWaiting: async (id) => {
-    const r = await sb(`orders?id=eq.${id}&status=eq.awaiting_payment`,
+  clearPayWaiting: async (id, seen) => {
+    // ต้องมีตัวกันชนเหมือน setPayWaiting — ไม่งั้นจอที่ถือภาพเก่าจะได้ updated_at ใหม่ไปใส่ verRef
+    // แล้วผ่านด่านกันชนของการเขียนครั้งถัดไป ไปทับรายการที่เครื่องอื่นเพิ่งสั่งเข้ามา
+    const guard = seen==null ? "is.null" : `eq.${encodeURIComponent(seen)}`;
+    const r = await sb(`orders?id=eq.${id}&updated_at=${guard}&status=eq.awaiting_payment`,
       {method:"PATCH", body:JSON.stringify({status:"pending", updated_at:new Date().toISOString()})});
     return (Array.isArray(r)&&r.length)?r[0]:null;
   },
@@ -1530,6 +1533,9 @@ const roundBill=(amount,mode)=>{
   if(mode==="down")return Math.floor(v);
   return v;
 };
+// กุญแจของส่วนลดรายเมนู — ผูกกับ line_uid ของแถว ไม่ใช่เลขลำดับ
+// เลขลำดับเลื่อนทุกครั้งที่ลบแถว ส่วนลดจะไปเกาะเมนูผิดตัวโดยไม่มีใครรู้ (ของแถมกลายเป็นของขาย/กลับกัน)
+const discKey=(it,idx)=>String((it&&it.line_uid)||("#"+idx));
 const splitEvenly=(total,n)=>{
   const k=Math.max(1,Math.floor(+n||1));
   const cents=Math.round((+total||0)*100);
@@ -17480,6 +17486,8 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const cashLine=(paid&&order.payment_method==="cash"&&order.cash_received)?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(2)}</span></div>`:"";
   const promoLine=order.promo_amount>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>🎁 ${esc(order.promo_name||"โปรโมชั่น")}</span><span>-฿${(+order.promo_amount).toFixed(2)}</span></div>`:"";
   const scLine=order.service_charge>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>Service Charge</span><span>+฿${(+order.service_charge).toFixed(2)}</span></div>`:"";
+  // ปัดเศษต้องขึ้นบนใบทางนี้ด้วย ไม่งั้นใบกำกับภาษีอย่างย่อบวกไม่ลง (ทางนี้ใช้ตอนพิมพ์ย้อนหลังด้วย)
+  const roundLine=order.round_adj?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>ปัดเศษ</span><span>${(+order.round_adj>0?"+":"-")}฿${Math.abs(+order.round_adj).toFixed(2)}</span></div>`:"";
   const vatLine=order.vat>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>VAT ${esc(order.vat_rate||7)}%${order.vat_included?" (รวมในราคา)":""}</span><span>${order.vat_included?"":"+"}฿${(+order.vat).toFixed(2)}</span></div>`:"";
   // PromptPay QR (lazy load via google chart API)
   let qrBlock="";
@@ -17500,7 +17508,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const payBlock=paid
     ?`<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>`
     :`<div class="line"></div><div style="text-align:center;font-size:14px;font-weight:800">** ยังไม่ชำระเงิน **</div><div style="text-align:center;font-size:11px;color:#555;margin-top:2px">กรุณาชำระที่เคาน์เตอร์</div>${qrBlock}`;
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;margin:0;padding:0;font-size:13px;background:#e2e8f0}#rcpt{width:72mm;margin:0 auto;padding:10px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.18)}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{body{background:#fff}#rcpt{zoom:1!important;box-shadow:none;margin:0}@page{margin:0;size:72mm auto}}</style></head><body><div id="rcpt"><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${fmtDT()}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}</div><br/>${autoPrint}</body></html>`);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;margin:0;padding:0;font-size:13px;background:#e2e8f0}#rcpt{width:72mm;margin:0 auto;padding:10px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.18)}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{body{background:#fff}#rcpt{zoom:1!important;box-shadow:none;margin:0}@page{margin:0;size:72mm auto}}</style></head><body><div id="rcpt"><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${fmtDT()}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}${roundLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}</div><br/>${autoPrint}</body></html>`);
   w.document.close();addPrintClose(w);
 }
 // ── Bluetooth ESC-POS helpers ────────────────────────────
@@ -18594,7 +18602,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const clean=({_new,...r})=>r;
   const newRows=useMemo(()=>items.filter(i=>i._new&&(+i.qty||0)>0),[items]);
   const hasNewItems=newRows.length>0;
-  const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
+  const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[discKey(i,idx)];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
   const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
 
@@ -18818,8 +18826,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(!existingOrder?.id)return;
     if(!await confirmDlg({title:"ยกเลิกการรอชำระเงิน?",message:"โต๊ะกลับไปสถานะปกติ · ลูกค้าสั่งเพิ่มได้อีกครั้ง · แก้ส่วนลดได้\n\n✅ QR ใบเดิมที่ลูกค้าถืออยู่ยังใช้จ่ายได้ ไม่ต้องพิมพ์ใหม่\n(QR พร้อมเพย์ผูกกับยอดเงิน ไม่ได้ผูกกับโต๊ะ) — ยกเว้นถ้ายอดเปลี่ยน ระบบจะเตือนให้เอง",confirmLabel:"ยกเลิกการรอชำระ",cancelLabel:"ไม่ยกเลิก"}))return;
     try{
-      const row=await api.clearPayWaiting(existingOrder.id);
-      if(row)verRef.current=row.updated_at;
+      const row=await api.clearPayWaiting(existingOrder.id,verRef.current);
+      if(!row){alert("⚠️ ยกเลิกไม่สำเร็จ — บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีคนสั่งเพิ่ม)\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่");return;}
+      verRef.current=row.updated_at;
       setPayWait(false);   // คง lockedTotal ไว้ ระบบจะได้เฝ้าว่า QR ใบเดิมยังใช้ยอดนี้อยู่ไหม
       posToast("ยกเลิกการรอชำระแล้ว — QR ใบเดิมยังใช้ได้ถ้ายอดไม่เปลี่ยน","ok");
       onDone&&onDone();
@@ -18886,7 +18895,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     }))return;
     setSavingGuard(true);
     try{
-      const itemsWithDisc=items.map(clean).map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
+      const itemsWithDisc=items.map(clean).map((i,idx)=>{const d=itemDisc[discKey(i,idx)];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
       const cashReceived=payMethod==="cash"?(+cashRcv||total):null;
       const promoMeta=selectedPromo?{promo_id:selectedPromo.id,promo_name:selectedPromo.name,promo_amount:promoDiscount}:{};
       // Base fields (always exist) + full breakdown (needs the migration). If the
@@ -18933,7 +18942,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       }
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
       // passing the combined figure would deduct the promotion twice on the printed receipt.
-      await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
+      await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSavingGuard(false);
   }
@@ -19162,8 +19171,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
               const splitDisc=round2(totalDiscount*ratio);
               const splitBase=Math.max(0,splitSubtotal-splitDisc);
               const splitSC=round2(sc*ratio),splitVAT=round2(vat*ratio);
-              const splitTotal=round2(vatIncluded?splitBase+splitSC:splitBase+splitSC+splitVAT);
-              smartPrintReceipt({items:splitItems,subtotal:splitSubtotal,discount:splitDisc,total:splitTotal,payment_method:"split",
+              // เฉลี่ยส่วนต่างการปัดเศษตามสัดส่วนด้วย ไม่งั้นใบแบ่งจ่ายรวมกันแล้วขาดจากยอดที่เก็บจริง
+  const splitAdj=round2((+roundAdj||0)*ratio);
+  const splitTotal=round2((vatIncluded?splitBase+splitSC:splitBase+splitSC+splitVAT)+splitAdj);
+              smartPrintReceipt({items:splitItems,subtotal:splitSubtotal,discount:splitDisc,total:splitTotal,round_adj:splitAdj,payment_method:"split",
                 service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded,
                 ...(promoDiscount>0?{promo_amount:round2(promoDiscount*ratio),promo_name:selectedPromo&&selectedPromo.name}:{})},table.table_number,false);
             }} full s={{padding:"9px"}}>พิมพ์ใบแบ่งจ่าย</Btn>}
@@ -19197,16 +19208,16 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
       <div style={{flex:1,overflowY:"auto",padding:"14px 20px"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 รายการ ({items.length})</div>
         <div style={{background:C.bg,borderRadius:12,padding:"8px 12px",marginBottom:14}}>
-          {items.map((it,idx)=>{const d=itemDisc[idx];const lineTotal=it.price*it.qty;const lineDisc=discMode==="item"&&d&&d.v?(d.t==="percent"?lineTotal*(+d.v||0)/100:Math.min(+d.v||0,lineTotal)):0;return <div key={idx} style={{padding:"6px 0",borderBottom:idx<items.length-1?`1px dashed ${C.line}`:"none"}}>
+          {items.map((it,idx)=>{const d=itemDisc[discKey(it,idx)];const lineTotal=it.price*it.qty;const lineDisc=discMode==="item"&&d&&d.v?(d.t==="percent"?lineTotal*(+d.v||0)/100:Math.min(+d.v||0,lineTotal)):0;return <div key={idx} style={{padding:"6px 0",borderBottom:idx<items.length-1?`1px dashed ${C.line}`:"none"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:600,color:C.ink}}>{it.qty}x {it.name}</div>
               <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink}}>฿{lineTotal.toFixed(0)}</div>
             </div>
             {discMode==="item"&&<div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
-              <select value={d?.t||"percent"} onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{}),t:e.target.value,v:p[idx]?.v||0}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}>
+              <select disabled={payWait} value={d?.t||"percent"} onChange={e=>setItemDisc(p=>({...p,[discKey(it,idx)]:{...(p[discKey(it,idx)]||{}),t:e.target.value,v:p[discKey(it,idx)]?.v||0}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}>
                 <option value="percent">%</option><option value="amount">฿</option>
               </select>
-              <NumInput value={d?.v||""} onValue={v=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{t:"percent"}),v}}))} placeholder="0" style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
+              <NumInput disabled={payWait} value={d?.v||""} onValue={v=>{if(payWait)return;setItemDisc(p=>({...p,[discKey(it,idx)]:{...(p[discKey(it,idx)]||{t:"percent"}),v}}));}} placeholder="0" style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
               {lineDisc>0&&<span style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>-฿{lineDisc.toFixed(0)}</span>}
             </div>}
           </div>;})}
@@ -19497,8 +19508,12 @@ function CustomerPage({branchId,tableId,token}){
     const vat=vatRate>0?Math.round(vatIncluded?vatBase*vatRate/(100+vatRate)*100:vatBase*vatRate)/100:0;
     const rawDue=Math.round((vatIncluded?base+sc:base+sc+vat)*100)/100;
     // ปัดเศษแบบเดียวกับจอพนักงาน — ยอดที่ลูกค้าเห็นต้องตรงกับยอดที่ต้องจ่ายจริงเป๊ะ
-    const due=roundBill(rawDue,roundModeOf(posCfg));
-    return {scRate,sc,vatRate,vat,vatIncluded,roundAdj:Math.round((due-rawDue)*100)/100,
+    let due=roundBill(rawDue,roundModeOf(posCfg));
+    // พิมพ์ QR ไปแล้ว = ยอดถูกล็อก ต้องโชว์ยอดบน QR ใบนั้น ไม่ใช่ยอดที่คำนวณสดจากรายการ
+    // (พนักงานอาจใส่ส่วนลดในป็อปอัพเช็คบิล ซึ่งมือถือลูกค้าไม่มีทางรู้)
+    const lock=myOrder&&myOrder.pay_lock;
+    if(myOrder&&myOrder.status==="awaiting_payment"&&lock&&lock.total!=null)due=+lock.total;
+    return {scRate,sc,vatRate,vat,vatIncluded,roundAdj:Math.round((due-rawDue)*100)/100,locked:!!(myOrder&&myOrder.status==="awaiting_payment"&&lock&&lock.total!=null),
       due:(myOrder&&myOrder.status==="paid")?(+myOrder.total||0):due};
   },[myOrder,posCfg]);
   const[gateLoading,setGateLoading]=useState(true);
@@ -19679,7 +19694,13 @@ function CustomerPage({branchId,tableId,token}){
       writeOutbox(null);setDone(true);loadMyOrder();
     }catch(e){
       console.error("flushOutbox",e);
-      if(e&&e.awaitingPayment){writeOutbox(null);setOutbox(null);setPayWaitMsg(true);loadMyOrder();}
+      if(e&&e.awaitingPayment){
+        // ของในคิวคือรายการที่เซิร์ฟเวอร์ยังไม่เคยได้รับ — ทิ้งไปคือออเดอร์ลูกค้าหายเงียบ
+        const back=(o&&Array.isArray(o.lines))?o.lines:[];
+        writeOutbox(null);setOutbox(null);
+        if(back.length)setCart(p=>[...back,...p]);
+        setPayWaitMsg(true);loadMyOrder();
+      }
     }
     flushingRef.current=false;
     setOutboxBusy(false);
@@ -19824,7 +19845,10 @@ function CustomerPage({branchId,tableId,token}){
             {myOrder.discount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>ส่วนลด</span><span>-฿{(myOrder.discount||0).toFixed(0)}</span></div>}
             {custBill.sc>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>Service Charge {custBill.scRate}%</span><span>+฿{custBill.sc.toFixed(0)}</span></div>}
             {custBill.vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>VAT {custBill.vatRate}%{custBill.vatIncluded?" (รวมในราคาแล้ว)":""}</span><span>{custBill.vatIncluded?"":"+"}฿{custBill.vat.toFixed(0)}</span></div>}
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:20,fontWeight:900,marginTop:6,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.3)"}}><span>รวมทั้งสิ้น</span><span>฿{custBill.due.toFixed(0)}</span></div>
+            {custBill.locked
+            ?<div style={{display:"flex",justifyContent:"space-between",fontSize:12,opacity:0.9}}><span>ยอดที่ล็อกไว้บน QR</span><span>ตามที่พนักงานออกใบ</span></div>
+            :custBill.roundAdj!==0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>ปัดเศษ</span><span>{custBill.roundAdj>0?"+":""}฿{Math.abs(custBill.roundAdj).toFixed(2)}</span></div>}
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:20,fontWeight:900,marginTop:6,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.3)"}}><span>รวมทั้งสิ้น</span><span>฿{custBill.due.toFixed(0)}</span></div>
           </div>
         </>}
       </div>
