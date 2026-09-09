@@ -19494,7 +19494,7 @@ function CustomerPage({branchId,tableId,token}){
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
-      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,alignContent:"start"}}>
+      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gridAutoRows:"max-content",gap:10,alignContent:"start"}}>
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
             {m.image?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
@@ -20937,7 +20937,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
           👆 กดค้างที่การ์ดเมนูแล้วลากเพื่อจัดลำดับ (สลับได้ภายในหมวดเดียวกัน) · เมนูที่อยู่ก่อน ลูกค้าเห็นก่อน
         </div>
         <div ref={gridRef} onPointerMove={moveMDrag} onPointerUp={endMDrag} onPointerCancel={endMDrag}
-          style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10,alignContent:"start",
+          style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gridAutoRows:"max-content",gap:10,alignContent:"start",
           maxHeight:"58vh",overflowY:mDrag?"hidden":"auto",overflowX:"hidden",padding:"2px 2px 8px",
           touchAction:mDrag?"none":"pan-y"}}>
           {visible.map(m=><MenuMgrCard key={m.id} m={m}

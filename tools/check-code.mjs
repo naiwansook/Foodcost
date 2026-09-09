@@ -1083,6 +1083,11 @@ section("หน้าลูกค้าสแกน: เลื่อนดูเ
   const shrinkable = CUST.split('flex:1,overflowY:"auto",minHeight:0').length - 1;
   ck("ช่องที่ตั้งใจให้เลื่อนในหน้าลูกค้า หดได้จริงทุกช่อง", { scrollers, shrinkable }, { scrollers: 3, shrinkable: 3 });
   ok_("ปัดเลยขอบแล้วไม่ไปลากหน้าเว็บข้างหลัง", CUST.includes('overscrollBehavior:"contain"'));
+  // ความสูงแน่นอน + ตาราง = กับดัก: แถวจะถูกบีบให้พอดีกรอบแทนที่จะสูงตามการ์ด
+  // (การ์ดเป็น overflow:hidden ขนาดต่ำสุดอัตโนมัติจึงเป็น 0 ยุบได้ไม่จำกัด)
+  // วัดของจริงหลังขึ้นระบบ: การ์ดเหลือ 2.49px ทั้ง 100 ใบ อ่านอะไรไม่ได้เลย
+  ok_("แถวการ์ดสูงตามเนื้อหา ไม่ถูกความสูงของกรอบบีบจนแบน",
+    CUST.includes('gridTemplateColumns:"repeat(2,1fr)",gridAutoRows:"max-content"'));
 }
 
 section("หมวดหมู่ตรงกันทุกจอ");
