@@ -5571,7 +5571,26 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
   // หมวดเมนูเป็นของครัวกลางชุดเดียว ทุกสาขาเห็นเหมือนกัน (branch_id เป็น null)
   // หมวดเก่าที่สาขาเคยสร้างไว้ (branch_id มีค่า) ไม่เอามาแสดงแล้ว
-  const allMenuCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&!c.branch_id),[allCats]);
+  // ชิปหมวดในจอเมนูเคยอ่านจากตาราง categories อย่างเดียว แต่หมวดจริงของเมนูอยู่ที่ menus.category
+  // สองที่นี้ไม่ตรงกัน (ตรวจ 9 ก.ย. 69): 7 หมวดที่เมนู 41 ตัวใช้อยู่ไม่มีแถวในตารางเลย
+  // (Refill, รีฟิล, ของทอดบุฟเฟต์, เนื้อบุฟเฟต์, ยำบุฟเฟต์, ส้มตำบุฟเฟต์, เมนูสั่งเพิ่มบุฟเฟต์)
+  // จอเมนูจึงไม่มีชิปให้กด และช่องเลือกหมวดของเมนูนั้นก็ว่าง ทั้งที่หน้าลูกค้า/ใบครัวเห็นหมวดนั้นอยู่
+  // อีก 4 หมวดมีแถวซ้ำ 2 แถว → ชิปขึ้นซ้ำสองใบชื่อเดียวกัน
+  // รวมสองแหล่ง: แถวในตาราง (ตัดชื่อซ้ำ) + หมวดที่เมนูใช้จริงต่อท้าย
+  // หมวดที่ไม่มีแถว แก้ชื่อ/ลบไม่ได้ (ไม่มีแถวให้แก้) — เปลี่ยนได้ด้วยการย้ายหมวดของเมนูเท่านั้น
+  const allMenuCats=useMemo(()=>{
+    const seen=new Set(),out=[];
+    for(const c of allCats){
+      if(c.type!=="menu"||c.branch_id)continue;
+      const n=String(c.name||"").trim();
+      if(!n||seen.has(n))continue;
+      seen.add(n);out.push(c);
+    }
+    const ghosts=[];
+    for(const m of menus){const n=menuCatOf(m);if(n&&!seen.has(n)){seen.add(n);ghosts.push({id:"__used_"+n,name:n,type:"menu",noRow:true});}}
+    ghosts.sort((a,b)=>thCmp(a.name,b.name));   // ต่อท้ายโดยไม่ไปสลับลำดับชิปเดิมที่ร้านคุ้นแล้ว
+    return out.concat(ghosts);
+  },[allCats,menus]);
   // ── ชิปหมวด: ซ่อนหมวดที่สาขานี้ไม่มีเมนูสักตัว ───────────────────────────────
   // หมวดเป็นชุดกลางชุดเดียวทุกสาขา แต่เมนูถูกกรองด้วย visible_branches
   // → หมวดที่ครัวกลางเปิดไว้แต่ไม่ได้เปิดเมนูตัวไหนให้สาขานี้เลย จะเป็นชิปเปล่า
@@ -5687,8 +5706,8 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
         ?<input key={cat.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:110,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
         :<div key={cat.id} style={{display:"flex",alignItems:"center"}}>
           {catTabBtn(cat.name,selCat===cat.name,()=>setSelCat(cat.name))}
-          {isCentral&&<button onClick={()=>{setEditingCatId(cat.id);setEditingCatName(cat.name);}} style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.pencil} s={11} c={C.ink4}/></button>}
-          {isCentral&&<button onClick={()=>delCat(cat)} style={{background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.trash} s={11} c={C.red}/></button>}
+          {isCentral&&!cat.noRow&&<button onClick={()=>{setEditingCatId(cat.id);setEditingCatName(cat.name);}} style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.pencil} s={11} c={C.ink4}/></button>}
+          {isCentral&&!cat.noRow&&<button onClick={()=>delCat(cat)} style={{background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.trash} s={11} c={C.red}/></button>}
         </div>
       )}
       {addingCat
