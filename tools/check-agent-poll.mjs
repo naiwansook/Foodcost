@@ -381,6 +381,22 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
     SRC.includes("if (!j) continue;") && !/if \(j && String\(state\.printed/.test(SRC));
 }
 
+// ── ใบครัวต้องบอกได้เสมอว่าไปโต๊ะไหน (เหตุจริง 9 ก.ย. 69) ──
+// บิล #17 ออกใบครัวมาโดยไม่มีชื่อโต๊ะเลย ครัวทำเสร็จแล้วไม่รู้จะส่งใคร
+// ต้นเหตุอยู่ที่แอป (แก้แล้ว) แต่ใบครัวเองก็ต้องไม่มีทางออกมาเป็นกระดาษไร้ปลายทาง
+{
+  const src = grabBetween("function tableLabel(o) {", "async function printItems(");
+  const tableLabel = new Function(src + " return tableLabel;")();
+  ok_("มีชื่อโต๊ะ = ใช้ชื่อโต๊ะตรงๆ", tableLabel({ id: 9, table_number: "C8" }) === "C8");
+  ok_("ไม่มีชื่อโต๊ะ = พิมพ์เลขบิลแทน ไม่ใช่ปล่อยว่าง",
+    tableLabel({ id: 17, table_number: null }).includes("17") && tableLabel({ id: 17, table_number: null }).includes("ไม่ระบุโต๊ะ"));
+  ok_("ชื่อโต๊ะเป็นช่องว่างล้วนก็ถือว่าไม่มี", tableLabel({ id: 5, table_number: "   " }).includes("5"));
+  ok_("เลข 0 เป็นชื่อโต๊ะที่ใช้ได้ ห้ามตีเป็นค่าว่าง", tableLabel({ id: 5, table_number: 0 }) === "0");
+  ok_("สั่งพิมพ์ใช้ตัวนี้ ไม่ได้ส่งชื่อโต๊ะดิบ", SRC.includes("printItems(items, tableLabel(o), printers, done,"));
+  ok_("ส่งเลขบิลและผู้สั่งไปกับใบด้วย", SRC.includes("{ bill: o.id, by: o.ordered_by }") && SRC.includes("select=id,table_number,items,ordered_by"));
+  ok_("รายการที่พิมพ์ไม่ผ่านก็บันทึกชื่อโต๊ะแบบเดียวกัน", SRC.includes("table: tableLabel(order),"));
+}
+
 console.log("\n" + "=".repeat(52));
 console.log(fail === 0 ? "OK ผ่านทั้งหมด " + pass + " ข้อ" : "FAIL ล้มเหลว " + fail + " ข้อ (ผ่าน " + pass + ")");
 process.exitCode = fail ? 1 : 0;

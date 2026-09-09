@@ -16,6 +16,7 @@ const AGENT = fs.readFileSync("public/print-agent.js", "utf8");
 const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", import.meta.url), "utf8");
 const PUSH = fs.readFileSync(new URL("../api/push.js", import.meta.url), "utf8");
 const VERCEL = JSON.parse(fs.readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
+const SLIP = fs.readFileSync(new URL("../api/kitchen-slip.js", import.meta.url), "utf8");
 const BACKUP = fs.readFileSync(new URL("../api/backup.js", import.meta.url), "utf8");
 const WATCHDOG = fs.readFileSync(new URL("../.github/workflows/health-watchdog.yml", import.meta.url), "utf8");
 
@@ -947,6 +948,18 @@ const guards = [
     APP.split(").sort((a,b)=>cs(menuCatOf(a),menuCatOf(b)))").length - 1 === 2],
   ["ทั้งสองฝั่งอ่านลำดับจากที่เก็บเดียวกัน",
     APP.includes("const cs=catSorter(catOrderOf(posCfg));") && APP.includes("const cs=catSorter(catOrderOf(posSettings));")],
+  // ── บิลต้องมีชื่อโต๊ะเสมอ (เหตุจริง 9 ก.ย. 69: บิล #17 ไม่มีชื่อโต๊ะ ใบครัวเลยไร้ปลายทาง) ──
+  // หน้าลูกค้าอ่านชื่อโต๊ะจากสถานะบนจอ ตอนส่งของค้างจากคิวออฟไลน์สถานะยังโหลดไม่เสร็จ
+  // ปิดที่ posAppendItems จุดเดียว เพราะทุกทางที่สร้างบิลผ่านฟังก์ชันนี้หมด
+  ["ไม่มีชื่อโต๊ะส่งมา ให้ไปหาจาก table_id ก่อนสร้างบิล",
+    APP.includes('if((table_number==null||String(table_number).trim()==="")&&table_id!=null){')
+    && APP.includes("if(Array.isArray(r)&&r[0]&&r[0].table_number)table_number=r[0].table_number;")],
+  ["หาไม่เจอก็ยังต้องบันทึกบิลได้ ไม่ใช่ล้มทั้งออเดอร์", APP.includes("      }catch{}\n    }\n    const sum =")],
+  // ใบครัวคือกระดาษใบเดียวที่ครัวมี ต้องมีทุกอย่างที่ต้องใช้
+  ["ใบครัวพิมพ์เลขบิลและผู้สั่ง", SLIP.includes("const foot = [body.bill ?")],
+  ["ลูกค้าสแกนสั่งเองต้องอ่านออกบนใบครัว", SLIP.includes('"ลูกค้าสแกนสั่งเอง"')],
+  ["ชื่อโต๊ะยังเป็นตัวใหญ่สุดบนใบ", SLIP.includes('{ t: String(body.table || ""), size: 76, bold: true, align: "center" }')],
+  ["ตัวเลือกและหมายเหตุยังพิมพ์ครบ", SLIP.includes('lines.push({ t: "- " + n,') && SLIP.includes('lines.push({ t: "* " + it.note,')],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

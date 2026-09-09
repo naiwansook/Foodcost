@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 33;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 35;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -53,7 +53,7 @@ async function checkUpdate() {
 const getActiveOrderHeads = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,updated_at&branch_id=eq.${BRANCH}`);
 // ดึงรายการเฉพาะบิลที่เปลี่ยนจริง — คงตัวกรองสถานะไว้ด้วย เผื่อบิลถูกปิดคั่นระหว่างสองคำขอ
 // (ถ้าถูกปิดไปแล้วจะไม่ถูกส่งกลับมา = ไม่พิมพ์ใบของบิลที่จ่ายเงินไปแล้ว)
-const getOrdersByIds = (ids) => sb(`orders?id=in.(${ids.join(",")})&status=neq.paid&status=neq.cancelled&select=id,table_number,items&branch_id=eq.${BRANCH}`);
+const getOrdersByIds = (ids) => sb(`orders?id=in.(${ids.join(",")})&status=neq.paid&status=neq.cancelled&select=id,table_number,items,ordered_by&branch_id=eq.${BRANCH}`);
 // ดึงเต็ม — ใช้ตอน prime และตอนตาข่ายนิรภัยเท่านั้น
 const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,table_number,items&order=created_at.desc&branch_id=eq.${BRANCH}`);
 // ดึงเฉพาะเครื่องพิมพ์ของสาขานี้ (+ที่ใช้ร่วมทุกสาขา branch_id=null) — ไม่ดึงข้ามสาขา (ทุก caller กรองแบบนี้อยู่แล้ว)
@@ -235,14 +235,16 @@ function newItemsVs(oldSig, items) {
 
 // เรนเดอร์ใบครัวเป็นรูปภาพ (ไทยคมชัด) ผ่านบริการบน Vercel — ถ้าล้มเหลวคืน null แล้วถอยไปใช้ตัวอักษร ESC/POS
 const SLIP_RENDER_URL = "https://foodcost-eta.vercel.app/api/kitchen-slip";
-async function fetchSlipRaster(items, tableNum) {
+async function fetchSlipRaster(items, tableNum, meta) {
   // กันค้าง: ถ้าเรนเดอร์เกิน 9 วิ (serverless cold-start/ช้า) ยกเลิกแล้วถอยไปตัวอักษร — ไม่ให้บล็อกทั้งคิวพิมพ์
   const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
   const timer = ctrl ? setTimeout(() => ctrl.abort(), 9000) : null;
   try {
     const res = await fetch(SLIP_RENDER_URL, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ table: String(tableNum || ""), time: new Date().toLocaleString("th-TH"), items: (items || []).map(it => ({ qty: it.qty, name: it.name, options: it.options || [], note: it.note || "" })) }),
+      body: JSON.stringify({ table: String(tableNum || ""), time: new Date().toLocaleString("th-TH"),
+        bill: (meta && meta.bill != null) ? String(meta.bill) : "", by: (meta && meta.by) ? String(meta.by) : "",
+        items: (items || []).map(it => ({ qty: it.qty, name: it.name, options: it.options || [], note: it.note || "" })) }),
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
     if (!res.ok) return null;
@@ -259,9 +261,9 @@ async function mapLimit(arr, limit, fn) {
   return out;
 }
 // เรนเดอร์ "หนึ่งใบต่อหนึ่งรายการ" พร้อมกัน (cap 6) — ลองรูปภาพไทยคมชัดก่อน ถอยไปตัวอักษร ESC/POS ถ้าล้มเหลว (พิมพ์ไม่มีวันพัง)
-async function renderItemBufs(items, tableNum) {
+async function renderItemBufs(items, tableNum, meta) {
   return mapLimit(items || [], 6, async it => {
-    const b = await fetchSlipRaster([it], tableNum);
+    const b = await fetchSlipRaster([it], tableNum, meta);
     return b ? { buf: b, raster: true } : { buf: buildKitchenESC(it, tableNum), raster: false };
   });
 }
@@ -271,7 +273,7 @@ function bufsMode(parts) {
 }
 // รวมรายการเป็นบัฟเฟอร์พิมพ์ (เรนเดอร์ทุกใบพร้อมกัน) — ใช้โดยเส้นทางพิมพ์ซ้ำ (rp)
 async function itemsToBuffer(items, tableNum) {
-  const parts = await renderItemBufs(items, tableNum);
+  const parts = await renderItemBufs(items, tableNum, meta);
   return { buf: Buffer.concat(parts.map(p => p.buf)), mode: bufsMode(parts) };
 }
 // เครื่องนี้ต้องพิมพ์รายการนี้ไหม — ตาม "กำหนดการพิมพ์" เป๊ะๆ: ปักหมุดเมนู(printer_id)→เฉพาะเครื่องนั้น · ไม่งั้น categories=null(พิมพ์ทุกหมวด) หรือมีหมวดนั้นในลิสต์
@@ -287,12 +289,19 @@ function printerHandles(p, it) {
 //
 // ⚠️ หัวใจของการกันพิมพ์ท่วม: ถ้าเครื่องหนึ่งล่ม อีกเครื่องต้องไม่โดนส่งซ้ำ
 // เดิมส่งไปทุกเครื่องทุกรอบ เครื่องที่ดีจึงพิมพ์ใบเดิมทุก 5 วินาทีไม่หยุด
-async function printItems(items, tableNum, printers, alreadyDone) {
+// ถึงจะปิดต้นเหตุที่แอปแล้ว ใบครัวก็ต้องไม่มีทางออกมาโดยไม่บอกว่าโต๊ะไหน
+// ไม่มีชื่อโต๊ะ = พิมพ์เลขบิลแทน ครัวยังตามหาได้ ดีกว่ากระดาษที่บอกแค่ชื่ออาหาร
+function tableLabel(o) {
+  const t = o && o.table_number;
+  return (t == null || String(t).trim() === "") ? `ไม่ระบุโต๊ะ · บิล #${o && o.id}` : String(t);
+}
+
+async function printItems(items, tableNum, printers, alreadyDone, meta) {
   // ส่งรายการไป "ทุกเครื่องที่ตั้งค่าให้รับ" (ไม่ใช่เครื่องเดียว) — ตั้งทุกเครื่องพิมพ์ทุกหมวด = ออกทุกเครื่อง · ตั้งคนละหมวด = แยกกัน · ตรงตามที่ตั้งใน "กำหนดการพิมพ์"
   const all = (printers || []).filter(p => !isBluetooth(p) && p.ip);
   const usable = all.filter(p => !(alreadyDone && alreadyDone[p.id]));   // ข้ามเครื่องที่ผ่านแล้ว
   // เรนเดอร์ทุกใบ "ครั้งเดียว พร้อมกัน" แล้วใช้ซ้ำกับทุกเครื่องที่รับรายการนั้น (ไม่เรนเดอร์ซ้ำต่อเครื่อง, ไม่เรียงทีละใบ)
-  const bufs = await renderItemBufs(items, tableNum);
+  const bufs = await renderItemBufs(items, tableNum, meta);
   // ส่งไปทุกเครื่องพร้อมกัน (คนละเครื่อง = ไม่ชนกัน) — เครื่องเดียวกันไม่ถูกยิงซ้อน เพราะ tick พิมพ์ทีละออเดอร์
   const jobs = usable.map(p => {
     const idxs = [];
@@ -462,7 +471,7 @@ async function recordPrintFail(printers, order, items) {
     kept.push({
       at: Date.now(),
       orderId: order.id,
-      table: order.table_number || "",
+      table: tableLabel(order),
       names: [...new Set(items.map(i => i.name))].slice(0, 20),
       n: items.reduce((a, i) => a + (+i.qty || 0), 0),
     });
@@ -529,12 +538,12 @@ async function tick() {
     if (first) {
       console.log(`🆕 ออเดอร์ใหม่ โต๊ะ ${o.table_number} (${new Date().toLocaleTimeString("th-TH")})`);
       const items = last ? newItemsVs(last, o.items) : o.items;
-      if (items.length) ok = mark(await printItems(items, o.table_number, printers, done));
+      if (items.length) ok = mark(await printItems(items, tableLabel(o), printers, done, { bill: o.id, by: o.ordered_by }));
       if (ok) state.init[o.id] = 1;
     } else if (last && last !== sig) {
       console.log(`➕ เพิ่มรายการ โต๊ะ ${o.table_number}`);
       const items = newItemsVs(last, o.items);
-      if (items.length) ok = mark(await printItems(items, o.table_number, printers, done));
+      if (items.length) ok = mark(await printItems(items, tableLabel(o), printers, done, { bill: o.id, by: o.ordered_by }));
     }
     // ── ไม่ลองพิมพ์ใหม่เองเด็ดขาด ────────────────────────────────────────
     // เจ้าของสั่งไว้: พิมพ์ไม่สำเร็จให้ "แจ้งเตือนที่โต๊ะ" แล้วรอพนักงานกดเอง

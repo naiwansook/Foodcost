@@ -558,6 +558,16 @@ const api = {
   // turn a simultaneous double-create into a duplicate-key it catches and retries as
   // an append. Falls back gracefully (just creates) if that index isn't there yet.
   posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by}) => {
+    // ชื่อโต๊ะคือสิ่งเดียวที่บอกครัวว่าอาหารไปโต๊ะไหน — ใบที่ไม่มีชื่อโต๊ะคือใบที่ส่งของไม่ได้
+    // 9 ก.ย. 69 บิล #17 ออกใบครัวมาโดยไม่มีชื่อโต๊ะ: หน้าลูกค้าอ่านชื่อโต๊ะจากสถานะบนจอ
+    // ซึ่งตอนส่งของค้างจากคิวออฟไลน์ สถานะนั้นยังโหลดไม่เสร็จ → ส่งค่าว่างไปเงียบๆ
+    // ปิดที่นี่จุดเดียว เพราะทุกทางที่สร้างบิลผ่านฟังก์ชันนี้หมด แก้ที่ผู้เรียกทีละที่จะหลุดอีก
+    if((table_number==null||String(table_number).trim()==="")&&table_id!=null){
+      try{
+        const r=await sb(`tables?id=eq.${+table_id}&select=table_number&limit=1`);
+        if(Array.isArray(r)&&r[0]&&r[0].table_number)table_number=r[0].table_number;
+      }catch{}
+    }
     const sum = (arr) => Math.round((arr||[]).reduce((s,i)=>s+(+i.price||0)*(+i.qty||0),0)*100)/100;
     // Every cart line carries a globally-unique line_uid minted when the diner tapped it. Re-sending
     // the same cart (lost response, offline retry, double-tap) must therefore be a NO-OP, not a

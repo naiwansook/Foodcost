@@ -23,6 +23,10 @@ function buildLines(body) {
     { t: String(body.table || ""), size: 76, bold: true, align: "center" },   // เบอร์โต๊ะตัวใหญ่มาก ครัวเห็นชัด
   ];
   if (body.time) lines.push({ t: String(body.time), size: 20, align: "center" });
+  // เลขบิลคือตัวอ้างอิงเดียวที่ตามกลับไปหาบิลในระบบได้ — ครัวถือกระดาษมาถามได้ตรงใบ
+  // ผู้สั่งไว้ตรวจย้อนหลังตอนมีปัญหาว่าใครเป็นคนรับออเดอร์ หรือลูกค้าสแกนสั่งเอง
+  const foot = [body.bill ? `บิล #${body.bill}` : "", body.by ? (String(body.by) === "customer" ? "ลูกค้าสแกนสั่งเอง" : String(body.by)) : ""].filter(Boolean).join("  ·  ");
+  if (foot) lines.push({ t: foot, size: 20, align: "center" });
   lines.push({ rule: true });
   (body.items || []).forEach(it => {
     lines.push({ c1: String(it.qty), c2: String(it.name || ""), size: 46, bold: true, mb: 3 });   // จำนวน+ชื่อเมนูตัวใหญ่
