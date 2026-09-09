@@ -20245,7 +20245,19 @@ function printZReport({shift,totals,branch,user,note}){
 <div class="div"></div>
 <h3>📊 ยอดขาย</h3>
 <div class="row"><span>จำนวนบิล</span><span class="bold">${totals.orderCount} บิล</span></div>
-<div class="row"><span>ยอดขายรวม</span><span class="bold">฿${fmt(totals.totalSales)}</span></div>
+<div class="row"><span>จำนวนรายการอาหาร</span><span>${fmt(totals.itemQty)} ชิ้น</span></div>
+<div class="row"><span>เฉลี่ยต่อบิล</span><span>฿${fmt(totals.avgBill)}</span></div>
+<div class="div"></div>
+<h3>🧾 โครงสร้างยอด</h3>
+<div class="row"><span>ยอดก่อนส่วนลด</span><span>฿${fmt(totals.gross)}</span></div>
+${totals.disc?`<div class="row"><span>- ส่วนลด${totals.discPct?` (${totals.discPct}%)`:""}</span><span>-฿${fmt(totals.disc)}</span></div>`:""}
+${totals.promo?`<div class="row"><span>- โปรโมชั่น</span><span>-฿${fmt(totals.promo)}</span></div>`:""}
+${totals.svc?`<div class="row"><span>+ ค่าบริการ</span><span>+฿${fmt(totals.svc)}</span></div>`:""}
+${totals.vat?`<div class="row"><span>VAT${totals.vatIncluded?" (รวมในราคาแล้ว)":""}</span><span>${totals.vatIncluded?"":"+"}฿${fmt(totals.vat)}</span></div>`:""}
+${totals.roundAdj?`<div class="row"><span>ปัดเศษ</span><span>${totals.roundAdj>0?"+":"-"}฿${fmt(Math.abs(totals.roundAdj))}</span></div>`:""}
+<div class="row bold"><span>= ยอดขายสุทธิ</span><span class="bold">฿${fmt(totals.totalSales)}</span></div>
+<div class="div"></div>
+<h3>💳 แยกตามวิธีชำระ</h3>
 <div class="row"><span>&nbsp;&nbsp;• เงินสด</span><span>฿${fmt(totals.totalCash)}</span></div>
 <div class="row"><span>&nbsp;&nbsp;• โอน/พร้อมเพย์</span><span>฿${fmt(totals.totalTransfer)}</span></div>
 <div class="row"><span>&nbsp;&nbsp;• บัตร</span><span>฿${fmt(totals.totalCard)}</span></div>
@@ -20259,12 +20271,22 @@ function printZReport({shift,totals,branch,user,note}){
 <div class="row"><span>- ฝาก/ถอนเซฟ</span><span>฿${fmt(totals.drops)}</span></div>
 <div class="row"><span>- คืนเงิน</span><span>฿${fmt(totals.refunds)}</span></div>
 <div class="row bold"><span>= ยอดที่ควรมี</span><span>฿${fmt(totals.expected)}</span></div>
+${(totals.cancelCount||totals.openCount)?`<div class="div"></div><h3>⚠️ รายการที่ต้องตรวจ</h3>`:""}
+${totals.cancelCount?`<div class="row"><span>บิลที่ยกเลิก ${totals.cancelCount} ใบ</span><span class="bold">฿${fmt(totals.cancelAmt)}</span></div>
+<div style="font-size:10px;color:#555;margin:2px 0 4px">${totals.cancelList.map(c=>`${c.table||"#"+c.id} ฿${fmt(c.total)}${c.by?" ("+c.by+")":" (ไม่มีบันทึกผู้ยกเลิก)"}`).join(" · ")}</div>`:""}
+${totals.openCount?`<div class="row"><span>โต๊ะที่ยังไม่ปิดบิล ${totals.openCount} โต๊ะ</span><span class="bold">฿${fmt(totals.openAmt)}</span></div>
+<div style="font-size:10px;color:#555;margin:2px 0 4px">${totals.openList.map(c=>`${c.table||"#"+c.id} ฿${fmt(c.total)}`).join(" · ")}</div>`:""}
 <div class="div"></div>
 <div class="row big bold"><span>นับจริง</span><span>฿${fmt(totals.actual)}</span></div>
 <div class="row big bold" style="color:${totals.diff===0?'#10B981':totals.diff>0?'#3B82F6':'#EF4444'}"><span>${totals.diff===0?'✅ ตรงเป๊ะ':totals.diff>0?'📈 เกิน':'📉 ขาด'}</span><span>${totals.diff>0?'+':''}฿${fmt(Math.abs(totals.diff))}</span></div>
 ${note?`<div class="div"></div><div><b>หมายเหตุ:</b> ${note}</div>`:''}
 <div class="div"></div>
-<div class="center" style="font-size:10px;color:#666;margin-top:10px">พิมพ์เมื่อ ${fmtDT()}</div>
+<div class="div"></div>
+<div style="margin-top:16px;display:flex;gap:16px">
+  <div style="flex:1;text-align:center"><div style="border-top:1px dotted #000;padding-top:4px;font-size:10px">ผู้ปิดกะ</div></div>
+  <div style="flex:1;text-align:center"><div style="border-top:1px dotted #000;padding-top:4px;font-size:10px">ผู้ตรวจ</div></div>
+</div>
+<div class="center" style="font-size:10px;color:#666;margin-top:10px">พิมพ์เมื่อ ${fmtDT()} · ${user.name||user.username}</div>
 <script>setTimeout(()=>{window.print();},300);</script>
 </body></html>`;
   w.document.write(html);w.document.close();addPrintClose(w);
@@ -20273,12 +20295,21 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
   const[movements,setMovements]=useState([]);const[orders,setOrders]=useState([]);
   const[loading,setLoading]=useState(true);const[actualCash,setActualCash]=useState("");
   const[note,setNote]=useState("");const[saving,setSaving]=useState(false);
+  // โต๊ะที่ยังไม่ปิดบิล — ต้องดูก่อนปิดกะเสมอ
+  // บิลที่ยังเปิดอยู่คือเงินที่ยังไม่เข้ากะนี้ ปิดกะไปเลยแปลว่า Z-Report ขาดยอดพวกนี้
+  // และรอบหน้าจะไปโผล่ในกะถัดไปทั้งที่ลูกค้ากินในกะนี้ — ยอดสองกะเพี้ยนพร้อมกัน
+  const[openBills,setOpenBills]=useState([]);
+  const[cancelled,setCancelled]=useState([]);   // บิลที่ถูกยกเลิกในช่วงกะนี้
+  const[blockList,setBlockList]=useState(null);   // ไม่ null = กำลังเตือนว่ามีโต๊ะค้าง
   async function load(){
     setLoading(true);
     try{
       // ดึงบิลตั้งแต่เวลาเปิดกะ ครบทุกใบ (เดิมตัดที่ 200 ใบล่าสุด ทำให้ยอดกะขาด)
-      const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrdersSince(currentBranch.id,shift.opened_at)]);
+      // ดึงบิลที่ยังเปิดอยู่แยกต่างหาก — บิลที่เปิดมาก่อนเวลาเปิดกะก็ต้องนับ ไม่งั้นมองไม่เห็น
+      const[m,o,openNow]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrdersSince(currentBranch.id,shift.opened_at),api.getActiveOrders(currentBranch.id)]);
       setMovements(m);
+      setOpenBills(Array.isArray(openNow)?openNow:[]);
+      setCancelled((o||[]).filter(x=>x.status==="cancelled"));
       const since=new Date(shift.opened_at).getTime();
       // Source of truth: orders linked via cash_movements (sale rows) PLUS any paid orders updated in shift window
       const linkedIds=new Set(m.filter(x=>x.type==='sale'&&x.order_id).map(x=>x.order_id));
@@ -20300,16 +20331,48 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     orders.forEach(o=>{const t=+o.total||0;totalSales+=t;const pm=o.payment_method;if(pm==='cash')totalCash+=t;else if(pm==='transfer'||pm==='promptpay')totalTransfer+=t;else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;});
     const expected=openingCash+payIn+salesCash-payOut-drops-refunds;
     const actual=+actualCash||0;
-    return{openingCash,payIn,payOut,drops,refunds,salesCash,totalSales,totalCash,totalTransfer,totalCard,totalOther,expected,actual,diff:actual-expected,orderCount:orders.length};
-  },[movements,orders,actualCash]);
+    // โครงสร้างยอด — ใบปิดยอดต้องแยกให้เห็นว่ายอดขายมาจากอะไรบ้าง ไม่ใช่มีแต่ยอดสุทธิก้อนเดียว
+    // ส่วนลดคือตัวเลขที่ต้องเห็นที่สุด: ของจริงกะนี้ให้ส่วนลดไป ฿9,583 จากยอดก่อนลด ฿44,447 (21.6%)
+    // แล้วไม่เคยขึ้นบนจอปิดกะหรือใบ Z-Report เลยสักตัว
+    const sum=(k)=>round2(orders.reduce((a,o)=>a+(+o[k]||0),0));
+    const gross=sum("subtotal"),disc=sum("discount"),promo=sum("promo_amount");
+    const svc=sum("service_charge"),vatSum=sum("vat"),roundSum=sum("round_adj");
+    const vatIncluded=orders.length?orders[0].vat_included!==false:true;
+    const itemQty=orders.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+(+i.qty||0),0),0);
+    const cancelAmt=round2(cancelled.reduce((a,o)=>a+(+o.total||0),0));
+    const openAmt=round2(openBills.reduce((a,o)=>a+(+o.total||0),0));
+    return{openingCash,payIn,payOut,drops,refunds,salesCash,totalSales:round2(totalSales),
+      totalCash:round2(totalCash),totalTransfer:round2(totalTransfer),totalCard:round2(totalCard),totalOther:round2(totalOther),
+      expected:round2(expected),actual,diff:round2(actual-expected),orderCount:orders.length,
+      gross,disc,promo,svc,vat:vatSum,roundAdj:roundSum,vatIncluded,itemQty,
+      discPct:gross>0?round2(disc/gross*100):0,
+      avgBill:orders.length?round2(totalSales/orders.length):0,
+      cancelCount:cancelled.length,cancelAmt,
+      cancelList:cancelled.map(o=>({id:o.id,table:o.table_number,total:round2(+o.total||0),by:o.cancelled_by||null,reason:o.cancel_reason||null})),
+      openCount:openBills.length,openAmt,
+      openList:openBills.map(o=>({id:o.id,table:o.table_number,total:round2(+o.total||0)}))};
+  },[movements,orders,actualCash,cancelled,openBills]);
+  // กดปิดกะ = เช็คโต๊ะค้าง "สดๆ ตรงนั้น" ก่อนเสมอ ไม่ใช้ค่าที่โหลดไว้ตอนเปิดจอ
+  // ระหว่างที่นับเงินอยู่ อาจมีโต๊ะเปิดใหม่หรือเพิ่งปิดไป
   async function closeShift(){
+    let stuck=openBills;
+    try{const fresh=await api.getActiveOrders(currentBranch.id);if(Array.isArray(fresh)){stuck=fresh;setOpenBills(fresh);}}catch{}
+    if(stuck.length){setBlockList(stuck);return;}
+    await doCloseShift(null);
+  }
+  async function doCloseShift(forced){
     if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
     setSaving(true);
     try{
       // Print Z-report FIRST so a popup-blocker / printer issue doesn't strand the audit trail.
-      printZReport({shift,totals,branch:currentBranch,user:currentUser,note});
+      // ปิดทั้งที่ยังมีโต๊ะค้าง ต้องเขียนไว้ทั้งบน Z-Report และในกะ ตรวจย้อนหลังได้ว่าใครปิดทั้งที่ค้าง
+      const stuckNote=(forced&&forced.length)
+        ?`⚠️ ปิดกะทั้งที่ยังมีโต๊ะค้าง ${forced.length} โต๊ะ: ${forced.map(o=>o.table_number||("บิล #"+o.id)).join(", ")}`
+        :"";
+      const noteFull=[note,stuckNote].filter(Boolean).join("\n");
+      printZReport({shift,totals,branch:currentBranch,user:currentUser,note:noteFull});
       await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type:"closing",amount:round2(totals.actual),reason:"ปิดกะ - นับเงินจริง",note:totals.diff!==0?`ส่วนต่าง ${totals.diff>=0?'+':''}${round2(totals.diff)}`:null,user_id:currentUser.id,username:currentUser.username});
-      await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:note||null});
+      await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:noteFull||null});
       // Clear auto-print dedup so next shift starts fresh
       try{sessionStorage.removeItem("fc_printed_orders");}catch{}
       onClosed();
@@ -20317,6 +20380,35 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     setSaving(false);
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
+    {/* ── โต๊ะยังค้าง ── ปิดกะทั้งที่บิลยังเปิดอยู่ = เงินก้อนนั้นไม่เข้ากะนี้
+        Z-Report ขาดยอด และรอบหน้าไปโผล่ในกะถัดไปทั้งที่ลูกค้ากินในกะนี้ ยอดเพี้ยนสองกะ
+        เตือนแบบต้องกดยืนยันอีกชั้น ไม่ใช่ปล่อยผ่านเงียบๆ */}
+    {blockList&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5200,padding:14}}>
+      <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,430px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{padding:"18px 20px 12px",background:C.redLight,borderBottom:`1px solid ${C.red}33`}}>
+          <div style={{fontSize:34,marginBottom:4}}>🪑</div>
+          <div style={{fontSize:17,fontWeight:900,color:C.red}}>ยังมีโต๊ะที่ยังไม่ปิดบิล {blockList.length} โต๊ะ</div>
+          <div style={{fontSize:12,color:C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
+            ปิดกะตอนนี้ ยอดของโต๊ะพวกนี้จะไม่เข้ากะนี้ — Z-Report จะขาด และรอบหน้าจะไปโผล่ในกะถัดไป ทั้งที่ลูกค้ากินในกะนี้
+          </div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"12px 20px",minHeight:0}}>
+          {blockList.map(o=><div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 11px",marginBottom:6,borderRadius:10,background:C.bg,border:`1px solid ${C.line}`}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:800,color:C.ink}}>โต๊ะ {o.table_number||("— บิล #"+o.id)}</div>
+              <div style={{fontSize:11,color:C.ink4}}>{(o.items||[]).reduce((a,i)=>a+(+i.qty||0),0)} รายการ{o.status==="awaiting_payment"?" · รอลูกค้าโอน":""}</div>
+            </div>
+            <div style={{fontSize:14,fontWeight:900,color:C.ink,whiteSpace:"nowrap"}}>฿{(+o.total||0).toLocaleString()}</div>
+          </div>)}
+        </div>
+        <div style={{padding:"12px 20px 18px",borderTop:`1px solid ${C.line}`,display:"flex",flexDirection:"column",gap:8}}>
+          <Btn onClick={()=>{setBlockList(null);onClose&&onClose();}} full icon={I.check} s={{padding:"12px",fontSize:14.5,fontWeight:900}}>กลับไปเคลียร์โต๊ะก่อน</Btn>
+          <Btn v="ghost" onClick={()=>{const f=blockList;setBlockList(null);doCloseShift(f);}} s={{padding:"10px",fontSize:12.5,fontWeight:800,color:C.red,borderColor:`${C.red}55`}}>
+            ปิดกะทั้งที่ยังมีโต๊ะค้าง (บันทึกไว้ในรายงาน)
+          </Btn>
+        </div>
+      </div>
+    </div>}
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
       <div style={{padding:"14px 22px",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -20340,12 +20432,46 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               {l:"โอน/พร้อมเพย์",v:`฿${totals.totalTransfer.toLocaleString()}`,c:C.blue},
               {l:"บัตรเครดิต/เดบิต",v:`฿${totals.totalCard.toLocaleString()}`,c:C.purple},
               {l:"อื่นๆ",v:`฿${totals.totalOther.toLocaleString()}`,c:C.ink3},
+              {l:"เฉลี่ยต่อบิล",v:`฿${totals.avgBill.toLocaleString()}`,c:C.ink2},
+              {l:"จำนวนรายการอาหาร",v:`${totals.itemQty.toLocaleString()} ชิ้น`,c:C.ink2},
             ].map((s,i)=><div key={i} style={{background:C.white,borderRadius:10,padding:"8px 12px",border:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{s.l}</span>
               <span style={{fontSize:14,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</span>
             </div>)}
           </div>
         </div>
+        {/* โครงสร้างยอด — ยอดขายสุทธิมาจากไหน ต้องกางให้เห็น ไม่ใช่มีแต่ก้อนเดียว */}
+        <div style={{background:C.bg,borderRadius:14,padding:14,marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:10}}>🧾 โครงสร้างยอดขาย</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+            {[
+              {l:"ยอดก่อนส่วนลด",v:totals.gross},
+              {l:`- ส่วนลด${totals.discPct>0?` (${totals.discPct}% ของยอดก่อนลด)`:""}`,v:totals.disc,warn:totals.discPct>=15},
+              {l:"- โปรโมชั่น",v:totals.promo},
+              {l:"+ ค่าบริการ",v:totals.svc},
+              {l:totals.vatIncluded?`VAT (รวมในราคาแล้ว)`:"+ VAT",v:totals.vat,flat:totals.vatIncluded},
+              {l:"± ปัดเศษ",v:totals.roundAdj,signed:true},
+            ].filter(x=>x.v!==0||x.l==="ยอดก่อนส่วนลด").map((x,i)=><div key={i} style={{display:"flex",justifyContent:"space-between"}}>
+              <span style={{color:x.warn?C.red:C.ink3,fontWeight:x.warn?800:400}}>{x.l}</span>
+              <span style={{fontWeight:700,color:x.warn?C.red:C.ink}}>{x.signed&&x.v>0?"+":""}฿{(+x.v).toLocaleString()}</span>
+            </div>)}
+            <div style={{display:"flex",justifyContent:"space-between",paddingTop:8,marginTop:4,borderTop:`1.5px dashed ${C.line}`}}>
+              <span style={{fontWeight:800,color:C.ink2,fontSize:14}}>= ยอดขายสุทธิ</span>
+              <span style={{fontWeight:900,color:C.ink,fontSize:18}}>฿{totals.totalSales.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+        {/* รายการที่ต้องตรวจ — บิลยกเลิกกับโต๊ะค้างคือสองทางที่เงินหายเงียบที่สุด */}
+        {(totals.cancelCount>0||totals.openCount>0)&&<div style={{background:C.redLight,borderRadius:14,padding:14,marginBottom:14,border:`1px solid ${C.red}44`}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.red,marginBottom:8}}>⚠️ รายการที่ต้องตรวจ</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.red}}>
+            {totals.cancelCount>0&&<div>
+              <div style={{display:"flex",justifyContent:"space-between",fontWeight:800}}><span>บิลที่ยกเลิกในกะนี้ {totals.cancelCount} ใบ</span><span>฿{totals.cancelAmt.toLocaleString()}</span></div>
+              <div style={{fontSize:11,opacity:.9,marginTop:2,lineHeight:1.6}}>{totals.cancelList.map(c=>`${c.table||"#"+c.id} ฿${c.total.toLocaleString()}${c.by?" ("+c.by+")":" (ไม่มีบันทึกผู้ยกเลิก)"}`).join(" · ")}</div>
+            </div>}
+            {totals.openCount>0&&<div style={{display:"flex",justifyContent:"space-between",fontWeight:800}}><span>โต๊ะที่ยังไม่ปิดบิล {totals.openCount} โต๊ะ</span><span>฿{totals.openAmt.toLocaleString()}</span></div>}
+          </div>
+        </div>}
         <div style={{background:C.brandLight,borderRadius:14,padding:14,marginBottom:14,border:`1.5px solid ${C.brandBorder}`}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.brand,marginBottom:10}}>💰 เงินในลิ้นชัก</div>
           <div style={{display:"flex",flexDirection:"column",gap:5}}>
@@ -20353,12 +20479,12 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               {l:"เงินทอนเริ่มต้น",v:totals.openingCash},
               {l:"+ ขายเงินสด",v:totals.salesCash},
               {l:"+ รับเข้าเพิ่ม",v:totals.payIn},
-              {l:"- จ่ายออก",v:-totals.payOut},
-              {l:"- ฝาก/ถอนเซฟ",v:-totals.drops},
-              {l:"- คืนเงิน",v:-totals.refunds},
+              {l:"- จ่ายออก",v:totals.payOut,neg:true},
+              {l:"- ฝาก/ถอนเซฟ",v:totals.drops,neg:true},
+              {l:"- คืนเงิน",v:totals.refunds,neg:true},
             ].map((s,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>
               <span style={{color:C.ink3}}>{s.l}</span>
-              <span style={{fontWeight:700,color:s.v<0?C.red:C.ink}}>฿{(+s.v).toLocaleString()}</span>
+              <span style={{fontWeight:700,color:(s.neg&&s.v>0)?C.red:C.ink}}>฿{(+s.v||0).toLocaleString()}</span>
             </div>)}
             <div style={{display:"flex",justifyContent:"space-between",paddingTop:8,marginTop:4,borderTop:`1.5px dashed ${C.brand}55`,fontFamily:"'Sarabun',sans-serif"}}>
               <span style={{fontWeight:800,color:C.brand,fontSize:14}}>= ยอดที่ควรมี</span>
@@ -20377,6 +20503,10 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
           </div>}
         </div>
         <div style={{marginBottom:6}}>
+          {openBills.length>0&&<div style={{marginBottom:12,padding:"10px 13px",borderRadius:11,background:C.redLight,border:`1px solid ${C.red}55`,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontSize:12.5,fontWeight:900,color:C.red}}>🪑 ยังมีโต๊ะที่ยังไม่ปิดบิล {openBills.length} โต๊ะ</div>
+            <div style={{fontSize:11,color:C.red,marginTop:3,lineHeight:1.6}}>{openBills.map(o=>o.table_number||("บิล #"+o.id)).join(" · ")}</div>
+          </div>}
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:6}}>หมายเหตุปิดกะ</div>
           <textarea value={note} onChange={e=>setNote(e.target.value)} rows={2} placeholder="เช่น เงินขาด 50 บาท เพราะจ่ายลูกค้าผิด..." style={{...iS,fontSize:13,resize:"none"}}/>
         </div>
@@ -22524,6 +22654,37 @@ function SalesReportModal({currentBranch,onClose}){
   const lostTotal=cancelled.reduce((s,o)=>s+(+o.total||0),0);
   const rev=paid.reduce((s,o)=>s+(+o.total||0),0);
   const avg=paid.length?rev/paid.length:0;
+  // ── ตัวเลขที่จอนี้ยังไม่เคยบอก ─────────────────────────────────────────
+  // "ยอดขายที่ปิดแล้ว" อย่างเดียวไม่พอสำหรับดูระหว่างวัน — เจ้าของอยากรู้ว่า
+  // ตอนนี้ทั้งร้านมีเงินอยู่เท่าไหร่ รวมโต๊ะที่ยังไม่ปิดด้วย
+  const openRev=unpaid.reduce((s2,o)=>s2+(+o.total||0),0);       // ยอดค้างในโต๊ะที่ยังไม่ปิด
+  const grandRev=rev+openRev;                                     // ยอดขายทั้งหมดขณะนี้
+  const grossTotal=paid.reduce((s2,o)=>s2+(+o.subtotal||0),0);   // ก่อนหักส่วนลด
+  const vatTotal=paid.reduce((s2,o)=>s2+(+o.vat||0),0);
+  const svcTotal=paid.reduce((s2,o)=>s2+(+o.service_charge||0),0);
+  const roundTotal=paid.reduce((s2,o)=>s2+(+o.round_adj||0),0);
+  const discPct=grossTotal>0?(discTotal/grossTotal*100):0;
+  const itemQty=paid.reduce((s2,o)=>s2+(o.items||[]).reduce((a,i)=>a+(+i.qty||0),0),0);
+  const avgItem=itemQty>0?rev/itemQty:0;
+  // บิลที่ยกเลิกโดยไม่มีบันทึกว่าใครยกเลิก = ตรวจย้อนหลังไม่ได้เลย ต้องเห็นตัวเลขนี้
+  const cancelNoWho=cancelled.filter(o=>!o.cancelled_by).length;
+  // เมนูขายดี — นับจากบิลที่ปิดแล้วเท่านั้น
+  const topMenus=(()=>{
+    const m2=new Map();
+    for(const o of paid)for(const i of (o.items||[])){
+      const k=String(i.name||"").trim();if(!k)continue;
+      const cur=m2.get(k)||{qty:0,amt:0};
+      cur.qty+=(+i.qty||0);cur.amt+=(+i.price||0)*(+i.qty||0);m2.set(k,cur);
+    }
+    return [...m2.entries()].map(([name,v])=>({name,...v})).sort((a,b)=>b.qty-a.qty).slice(0,5);
+  })();
+  // ช่วงเวลาที่ขายดี — ชั่วโมงไหนเงินเข้าเยอะสุด (ใช้จัดกำลังคน)
+  const byHour=(()=>{
+    const h=new Map();
+    for(const o of paid){const d=new Date(o.updated_at||o.created_at);if(isNaN(d))continue;
+      const k=d.getHours();h.set(k,(h.get(k)||0)+(+o.total||0));}
+    return [...h.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3);
+  })();
   const payBreak=Object.entries(paid.reduce((mm,o)=>{const k=o.payment_method||"other";if(!mm[k])mm[k]={sum:0,n:0};mm[k].sum+=(+o.total||0);mm[k].n+=1;return mm;},{})).sort((a,b)=>b[1].sum-a[1].sum);
   // เดิมบิลที่ยกเลิกถูกกรองทิ้งทุกตัวกรอง เหลือแค่ตัวเลขนับมุมขวา — กดดูไม่ได้เลย
   // ซึ่งแปลว่ากินเงินสดแล้วกดยกเลิกจะไม่มีใครเห็นอะไรเลย ต้องเปิดให้ดูได้
@@ -22566,18 +22727,40 @@ function SalesReportModal({currentBranch,onClose}){
     :<>
       {/* ── สรุปยอด ── */}
       <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
-        {[{l:"💰 ยอดขาย (ปิดบิลแล้ว)",v:`฿${m(rev)}`,c:C.green},
-          ...(discTotal>0?[{l:"🎁 ส่วนลดที่ให้ไป",v:`฿${m(discTotal)}`,c:C.purple}]:[]),
-          ...(lostTotal>0?[{l:"🗑️ มูลค่าบิลที่ยกเลิก",v:`฿${m(lostTotal)}`,c:C.red}]:[]),
-          {l:"🧾 บิลปิดแล้ว",v:paid.length,c:C.blue},
-          {l:"⏳ ยังไม่ปิดบิล",v:unpaid.length,c:C.yellow},
-          {l:"📈 เฉลี่ย/บิล",v:`฿${m(avg)}`,c:C.brand}].map(s=><div key={s.l} style={{flex:"1 1 140px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}><div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:20,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
+        {[{l:"🧮 ยอดขายทั้งหมดขณะนี้",v:`฿${m(grandRev)}`,c:C.ink,sub:"ปิดแล้ว + ยังไม่ปิด"},
+          {l:"💰 ยอดขาย (ปิดบิลแล้ว)",v:`฿${m(rev)}`,c:C.green,sub:`${paid.length} บิล`},
+          {l:"⏳ ยอดค้างในโต๊ะ (ยังไม่ปิด)",v:`฿${m(openRev)}`,c:C.yellow,sub:`${unpaid.length} โต๊ะ`},
+          ...(grossTotal>0?[{l:"🧾 ยอดก่อนส่วนลด",v:`฿${m(grossTotal)}`,c:C.ink2}]:[]),
+          ...(discTotal>0?[{l:"🎁 ส่วนลดที่ให้ไป",v:`฿${m(discTotal)}`,c:C.purple,sub:`${discPct.toFixed(1)}% ของยอดก่อนลด`,warn:discPct>=15}]:[]),
+          ...(lostTotal>0?[{l:"🗑️ มูลค่าบิลที่ยกเลิก",v:`฿${m(lostTotal)}`,c:C.red,sub:`${cancelled.length} ใบ`+(cancelNoWho?` · ${cancelNoWho} ใบไม่รู้ว่าใครยกเลิก`:""),warn:true}]:[]),
+          ...(svcTotal>0?[{l:"💼 ค่าบริการ",v:`฿${m(svcTotal)}`,c:C.teal}]:[]),
+          ...(vatTotal>0?[{l:"📊 VAT",v:`฿${m(vatTotal)}`,c:C.blue}]:[]),
+          ...(roundTotal!==0?[{l:"🪙 ปัดเศษรวม",v:`${roundTotal>0?"+":"-"}฿${m(Math.abs(roundTotal))}`,c:C.ink3}]:[]),
+          {l:"📈 เฉลี่ย/บิล",v:`฿${m(avg)}`,c:C.brand},
+          ...(itemQty>0?[{l:"🍽️ จำนวนรายการที่ขาย",v:`${m(itemQty)} ชิ้น`,c:C.ink2,sub:`เฉลี่ย ฿${m(avgItem)}/ชิ้น`}]:[])].map(s=><div key={s.l} style={{flex:"1 1 140px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${s.warn?C.red+"55":C.line}`}}><div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:20,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div>{s.sub&&<div style={{fontSize:10,color:s.warn?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2,lineHeight:1.4}}>{s.sub}</div>}</div>)}
       </div>
       {payBreak.length>0&&<div style={{background:C.bg,borderRadius:12,padding:"12px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
         <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>💳 แยกตามวิธีชำระเงิน</div>
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {payBreak.map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12.5,fontFamily:"'Sarabun',sans-serif"}}><span style={{color:C.ink2}}>{PAY_LABEL[k]||k} <span style={{color:C.ink4}}>· {v.n} บิล</span></span><span style={{fontWeight:800,color:C.ink}}>฿{m(v.sum)}</span></div>)}
         </div>
+      </div>}
+      {/* เมนูขายดี + ช่วงเวลาที่ขายดี — สองอย่างที่ใช้ตัดสินใจสั่งของและจัดกำลังคน */}
+      {(topMenus.length>0||byHour.length>0)&&<div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+        {topMenus.length>0&&<div style={{flex:"1 1 280px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>🔥 เมนูขายดี (จากบิลที่ปิดแล้ว)</div>
+          {topMenus.map((t,i)=><div key={t.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",padding:"3px 0"}}>
+            <span style={{color:C.ink2,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i+1}. {t.name}</span>
+            <span style={{color:C.ink3,whiteSpace:"nowrap"}}><b style={{color:C.ink}}>{m(t.qty)}</b> ชิ้น · ฿{m(t.amt)}</span>
+          </div>)}
+        </div>}
+        {byHour.length>0&&<div style={{flex:"1 1 220px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>⏰ ช่วงเวลาที่ขายดี</div>
+          {byHour.map(([h,v])=><div key={h} style={{display:"flex",justifyContent:"space-between",fontSize:12.5,fontFamily:"'Sarabun',sans-serif",padding:"3px 0"}}>
+            <span style={{color:C.ink2}}>{String(h).padStart(2,"0")}:00 - {String(h).padStart(2,"0")}:59</span>
+            <span style={{fontWeight:800,color:C.ink}}>฿{m(v)}</span>
+          </div>)}
+        </div>}
       </div>}
       {/* ── ตัวกรอง: ทั้งหมด / ปิดบิลแล้ว / ยังไม่ปิดบิล ── */}
       <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
