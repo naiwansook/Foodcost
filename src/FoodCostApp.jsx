@@ -551,13 +551,46 @@ const api = {
     const res = await sb(`orders?id=eq.${id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify(d) });
     return (Array.isArray(res)&&res.length>0)?res[0]:null;
   },
+  // ── รอลูกค้าโอน (พิมพ์ QR จ่ายเงินไปแล้ว) ────────────────────────────────
+  // เก็บสถานะไว้ที่ตัวบิล ไม่ใช่ในจอ เพราะสามฝ่ายต้องเห็นตรงกัน:
+  // ผังโต๊ะ (เปลี่ยนสีให้พนักงานรู้ว่าต้องมาเก็บเงิน) · หน้าลูกค้าสแกน (สั่งเพิ่มไม่ได้)
+  // และจอที่พนักงานกลับมากดยืนยันชำระ
+  // pay_lock เก็บ "ชุดตัวเลขที่ QR ใบนั้นใช้" — ส่วนลด โปรโมชั่น ยอดสุทธิ
+  // กลับมาเปิดโต๊ะแล้วกดยืนยันได้ทันทีโดยไม่ต้องตั้งส่วนลดใหม่ และรู้ได้ด้วยว่ายอดเปลี่ยนไปหรือยัง
+  setPayWaiting: async (id, seen, lock) => {
+    const guard = seen==null ? "is.null" : `eq.${encodeURIComponent(seen)}`;
+    const q = `orders?id=eq.${id}&updated_at=${guard}&status=neq.paid&status=neq.cancelled`;
+    const body = {status:"awaiting_payment", pay_lock:lock, updated_at:new Date().toISOString()};
+    try{
+      const r = await sb(q, {method:"PATCH", body:JSON.stringify(body)});
+      return (Array.isArray(r)&&r.length)?r[0]:null;
+    }catch(e){
+      // ยังไม่ได้เพิ่มคอลัมน์ pay_lock — อย่างน้อยสถานะต้องล็อกให้ได้ ไม่งั้นโต๊ะไม่เปลี่ยนสีเลย
+      if(!/column .* does not exist|PGRST204|schema cache/i.test(String((e&&e.message)||e)))throw e;
+      const {pay_lock, ...rest} = body;
+      const r2 = await sb(q, {method:"PATCH", body:JSON.stringify(rest)});
+      return (Array.isArray(r2)&&r2.length)?{...r2[0], _noLockCol:true}:null;
+    }
+  },
+  clearPayWaiting: async (id) => {
+    const body = {status:"pending", pay_lock:null, updated_at:new Date().toISOString()};
+    const q = `orders?id=eq.${id}&status=eq.awaiting_payment`;
+    try{
+      const r = await sb(q, {method:"PATCH", body:JSON.stringify(body)});
+      return (Array.isArray(r)&&r.length)?r[0]:null;
+    }catch(e){
+      if(!/column .* does not exist|PGRST204|schema cache/i.test(String((e&&e.message)||e)))throw e;
+      const r2 = await sb(q, {method:"PATCH", body:JSON.stringify({status:"pending",updated_at:new Date().toISOString()})});
+      return (Array.isArray(r2)&&r2.length)?r2[0]:null;
+    }
+  },
   // Atomically APPEND items to a table's OPEN order (create one if none exists),
   // retrying on concurrent writes. Pure-REST compare-and-set: two diners — or a diner
   // and the cashier — adding at the same moment never overwrite each other. The
   // create branch relies on the partial unique index (one open order per table) to
   // turn a simultaneous double-create into a duplicate-key it catches and retries as
   // an append. Falls back gracefully (just creates) if that index isn't there yet.
-  posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by}) => {
+  posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by, blockIfAwaiting}) => {
     // ชื่อโต๊ะคือสิ่งเดียวที่บอกครัวว่าอาหารไปโต๊ะไหน — ใบที่ไม่มีชื่อโต๊ะคือใบที่ส่งของไม่ได้
     // 9 ก.ย. 69 บิล #17 ออกใบครัวมาโดยไม่มีชื่อโต๊ะ: หน้าลูกค้าอ่านชื่อโต๊ะจากสถานะบนจอ
     // ซึ่งตอนส่งของค้างจากคิวออฟไลน์ สถานะนั้นยังโหลดไม่เสร็จ → ส่งค่าว่างไปเงียบๆ
@@ -581,6 +614,10 @@ const api = {
       const ex = await sb(`orders?table_id=eq.${table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`);
       if(Array.isArray(ex)&&ex.length>0){
         const cur=ex[0];sawOpenBill=true;
+        // พิมพ์ QR ให้ลูกค้าจ่ายไปแล้ว = ยอดถูกล็อก ห้ามลูกค้าสั่งเพิ่มจนกว่าพนักงานจะปลดล็อก
+        // กันที่นี่ด้วย ไม่ใช่แค่ซ่อนปุ่มบนจอ — หน้าที่ค้างอยู่ในมือลูกค้าอาจยังไม่รู้สถานะใหม่
+        // (พนักงานเพิ่ม/ลบเองได้อยู่ ตรงนี้บล็อกเฉพาะทางที่ส่งธงมา = หน้าลูกค้าสแกน)
+        if(blockIfAwaiting&&cur.status==="awaiting_payment"){const err=new Error("AWAITING_PAYMENT");err.awaitingPayment=true;throw err;}
         const fresh=dedupe(cur.items,newItems);
         if(fresh.length===0)return cur;                       // already recorded — nothing to do
         const merged=[...(cur.items||[]),...fresh]; const s=sum(merged);
@@ -17887,6 +17924,7 @@ const TS={
   occupied: {bg:"#FFF7ED",border:C.brand,text:C.brand,label:"มีลูกค้า"},
   ordering: {bg:C.yellowLight,border:C.yellow,text:"#92400E",label:"กำลังสั่ง"},
   bill:     {bg:C.redLight,border:C.red,text:C.red,label:"เรียกบิล"},
+  waitpay:  {bg:C.purpleLight,border:C.purple,text:C.purple,label:"รอชำระเงิน"},
   cleaning: {bg:C.lineLight,border:C.line,text:C.ink3,label:"ทำความสะอาด"},
 };
 
@@ -17996,7 +18034,8 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],onSelectTable,onA
   async function confirmAddZone(){const n=newZoneName.trim();if(!n||!onAddZone){setAddingZone(false);return;}setZoneSaving(true);try{await onAddZone(n);setNewZoneName("");setAddingZone(false);}catch(e){alert("เพิ่มโซนไม่สำเร็จ: "+(e&&e.message||e));}setZoneSaving(false);}
   const zoneColorMap=useMemo(()=>{const m={};zones.forEach(z=>{m[z.name]=z.color||C.brand;});return m;},[zones]);
   function getTableOrder(tid){return activeOrders.find(o=>o.table_id===tid);}
-  function getStatus(t){const o=getTableOrder(t.id);if(!o)return "available";if(o.status==="bill_requested")return "bill";return "occupied";}
+  // พิมพ์ QR จ่ายเงินไปแล้ว = โต๊ะนี้รอเงินเข้า พนักงานต้องเห็นจากผังว่าต้องมากดยืนยัน
+  function getStatus(t){const o=getTableOrder(t.id);if(!o)return "available";if(o.status==="awaiting_payment")return "waitpay";if(o.status==="bill_requested")return "bill";return "occupied";}
   const cols=Math.max(1,Math.floor((canvasW-PAD)/(TW+GAP)));
   function slotFor(idx){return{x:PAD+(idx%cols)*(TW+GAP),y:PAD+Math.floor(idx/cols)*(TH+GAP)};}
   function displayPos(t,idx){
@@ -18500,6 +18539,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const[discValue,setDiscValue]=useState(0);
   const[itemDisc,setItemDisc]=useState({});
   const[cashRcv,setCashRcv]=useState("");
+  // พิมพ์ QR จ่ายเงินไปแล้วหรือยัง — ล็อกส่วนลด/โปรฯ ไว้ให้ตรงกับยอดบน QR
+  // เก็บใน state ด้วย เพราะ prop existingOrder เป็นภาพนิ่งตอนกดเปิดโต๊ะ ไม่ได้รีเฟรชเอง
+  const[payWait,setPayWait]=useState(existingOrder?.status==="awaiting_payment");
+  const[lockedTotal,setLockedTotal]=useState(()=>{const L=existingOrder?.pay_lock;return L&&L.total!=null?+L.total:null;});
   const[voidIdx,setVoidIdx]=useState(null);
   const[showSplitBill,setShowSplitBill]=useState(false);
   const[splitMode,setSplitMode]=useState("even");   // even = เท่ากัน · item = ตามรายการ · amount = ระบุยอด
@@ -18543,11 +18586,23 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
   const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
 
+  // เปิดโต๊ะที่พิมพ์ QR ไปแล้ว — ตั้งส่วนลด/โปรฯ กลับให้เหมือนตอนพิมพ์ จะได้กดยืนยันชำระได้ทันที
+  useEffect(()=>{
+    const L=existingOrder&&existingOrder.pay_lock;
+    if(!L)return;
+    if(L.disc_mode)setDiscMode(L.disc_mode);
+    if(L.disc_type)setDiscType(L.disc_type);
+    if(L.disc_value!=null)setDiscValue(L.disc_value);
+    if(L.item_disc&&typeof L.item_disc==="object")setItemDisc(L.item_disc);
+    if(L.pay_method)setPayMethod(L.pay_method);
+    setSelectedPromoId(L.promo_id!=null?L.promo_id:null);
+  },[existingOrder]);
   // Promotions: auto-evaluate applicable, auto-pick best
   const menusById=useMemo(()=>{const m={};menus.forEach(x=>{m[x.id]=x;});return m;},[menus]);
   const applicablePromos=useMemo(()=>evalPromotions(promotions,{subtotal,items,menusById,now:new Date()}),[promotions,subtotal,items,menusById]);
   const[selectedPromoId,setSelectedPromoId]=useState(null);
   useEffect(()=>{
+    if(payWait)return;   // ล็อกยอดไว้แล้ว ห้ามระบบเลือกโปรฯ ให้เอง ไม่งั้นยอดเพี้ยนจากที่พิมพ์บน QR
     if(selectedPromoId&&!applicablePromos.find(p=>p.id===selectedPromoId)){setSelectedPromoId(null);return;}
     if(!selectedPromoId&&applicablePromos.length>0){
       let best=null,bestAmt=0;
@@ -18715,14 +18770,44 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // พิมพ์ใบแจ้งยอดพร้อม QR ท้ายใบ ให้ลูกค้าสแกนจ่าย — สั่งจากป็อปอัพเช็คบิล
   // ใช้ยอด "สด" ชุดเดียวกับที่ป็อปอัพแสดงอยู่ ไม่ใช่ค่าจากแถวบิลที่ยังไม่ปิด
   // (แถวที่ยังไม่ปิดเก็บแค่ยอดรวมดิบ ไม่มีค่าบริการ/VAT — เคยพิมพ์ QR ยอดน้อยกว่าที่ต้องจ่ายมาแล้ว)
-  function printPayQR(){
+  async function printPayQR(){
     if(!items.length){alert("ยังไม่มีรายการในบิล");return;}
+    // พิมพ์ก่อน ล็อกทีหลัง — ถ้า await ก่อนเปิดหน้าต่างพิมพ์ เบราว์เซอร์จะบล็อกป็อปอัพ
+    // (บางสาขายังไม่มีเครื่องพิมพ์ใบเสร็จ ต้องตกไปทางหน้าต่างพิมพ์)
     smartPrintReceipt({...(existingOrder||{}),items,payment_method:payMethod,
       subtotal,discount:round2(manualDiscount),total,
       service_charge:sc,service_charge_rate:scRate,vat,vat_rate:vatRate,vat_included:vatIncluded,
       subtotal_after_disc:subAfterDisc,
       promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,
       cash_received:null},table.table_number,false);   // false = ยังไม่ชำระ → ใบมี QR ท้ายใบ
+    if(!existingOrder?.id)return;
+    // ล็อกยอดกับสถานะไว้ที่ตัวบิล: โต๊ะเปลี่ยนสี · ลูกค้าสั่งเพิ่มไม่ได้ · ส่วนลดไม่ขยับ
+    try{
+      const lock={at:Date.now(),total:round2(total),subtotal:round2(subtotal),
+        disc_mode:discMode,disc_type:discType,disc_value:+discValue||0,item_disc:itemDisc,
+        promo_id:selectedPromoId??null,promo_name:selectedPromo?.name||null,promo_amount:round2(promoDiscount),
+        pay_method:payMethod,by:currentUser?.username||null};
+      const row=await api.setPayWaiting(existingOrder.id,verRef.current,lock);
+      if(!row){alert("⚠️ พิมพ์ QR แล้ว แต่ล็อกยอดไม่สำเร็จ — บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ ตรวจยอดอีกครั้ง แล้วพิมพ์ QR ใหม่");return;}
+      verRef.current=row.updated_at;
+      setPayWait(true);setLockedTotal(round2(total));
+      posToast(row._noLockCol
+        ?"🔒 โต๊ะนี้ขึ้นสถานะรอชำระเงินแล้ว (ยังล็อกส่วนลดไม่ได้ — ต้องเพิ่มคอลัมน์ในฐานข้อมูลก่อน)"
+        :"🔒 ล็อกยอดแล้ว — โต๊ะขึ้นสถานะรอชำระเงิน ลูกค้าสั่งเพิ่มไม่ได้จนกว่าจะยืนยันชำระ","ok");
+      onDone&&onDone();
+    }catch(e){alert("พิมพ์ QR แล้ว แต่ล็อกยอดไม่สำเร็จ: "+friendlyError(e));}
+  }
+  // ปลดล็อกกลับไปแก้ส่วนลด/พิมพ์ QR ใหม่ — กดพิมพ์ผิดโต๊ะแล้วต้องมีทางออก ไม่ใช่ค้างอยู่อย่างนั้น
+  async function unlockPayWait(){
+    if(!existingOrder?.id)return;
+    if(!await confirmDlg({title:"ปลดล็อกรอชำระเงิน?",message:"โต๊ะจะกลับไปสถานะปกติ ลูกค้าสั่งเพิ่มได้อีกครั้ง และแก้ส่วนลดได้\nQR ที่พิมพ์ไปแล้วจะใช้ไม่ได้ ต้องพิมพ์ใหม่",confirmLabel:"ปลดล็อก",cancelLabel:"ไม่ปลด"}))return;
+    try{
+      const row=await api.clearPayWaiting(existingOrder.id);
+      if(row)verRef.current=row.updated_at;
+      setPayWait(false);setLockedTotal(null);
+      posToast("ปลดล็อกแล้ว — แก้ส่วนลดได้ และต้องพิมพ์ QR ใหม่ถ้าจะให้ลูกค้าโอน","ok");
+      onDone&&onDone();
+    }catch(e){alert("ปลดล็อกไม่สำเร็จ: "+friendlyError(e));}
   }
   // ลบรายการ "พิมพ์ไม่ออก" ของบิลนี้ออกจากที่ตัวพิมพ์บันทึกไว้
   // อ่านของล่าสุดก่อนเขียนเสมอ — ตัวพิมพ์อาจเพิ่งเขียนคำสั่งอื่นลงไปในช่องเดียวกัน
@@ -19072,7 +19157,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       </div>;
     })()}
 
-    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR}
+    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR} payWait={payWait} lockedTotal={lockedTotal} onUnlockPay={unlockPayWait}
       onSplit={()=>setShowSplitBill(true)} onCancelOrder={cancelOrder}/>}
   </div>;
 }
@@ -19083,7 +19168,7 @@ const PAY_METHODS=[
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
-function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onCancelOrder}){
+function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onCancelOrder,payWait=false,lockedTotal=null,onUnlockPay}){
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
@@ -19111,6 +19196,16 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           </div>;})}
         </div>
 
+        {payWait&&<div style={{marginBottom:12,padding:"11px 13px",borderRadius:11,background:C.purpleLight,border:`1px solid ${C.purple}55`,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{fontSize:13,fontWeight:900,color:C.purple}}>🔒 รอลูกค้าโอน — ยอดถูกล็อกไว้แล้ว</div>
+          <div style={{fontSize:11.5,color:C.purple,marginTop:3,lineHeight:1.6,opacity:.95}}>
+            ส่วนลดและโปรโมชั่นแก้ไม่ได้ เพื่อให้ตรงกับยอดบน QR ที่ลูกค้าถืออยู่ · กด <b>ยืนยันชำระ</b> ได้เลยเมื่อเงินเข้า
+            {lockedTotal!=null&&Math.abs((+total||0)-(+lockedTotal||0))>0.009&&<><br/>
+              <b style={{color:C.red}}>⚠️ ยอดตอนนี้ ฿{(+total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} ไม่ตรงกับยอดบน QR ฿{(+lockedTotal||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — รายการถูกแก้หลังพิมพ์ QR ต้องพิมพ์ QR ใหม่</b></>}
+          </div>
+          {onUnlockPay&&<button onClick={onUnlockPay} style={{marginTop:7,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.purple}55`,background:C.white,color:C.purple,cursor:"pointer",fontSize:11.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>ปลดล็อก เพื่อแก้ส่วนลด / พิมพ์ QR ใหม่</button>}
+        </div>}
+        <div style={{opacity:payWait?.45:1,pointerEvents:payWait?"none":"auto"}}>
         {applicablePromos.length>0&&<><div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🎁 โปรโมชั่นที่เข้าเงื่อนไข ({applicablePromos.length})</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
           <button onClick={()=>onSelectPromo&&onSelectPromo(null)} style={{padding:"7px 12px",borderRadius:9,border:`2px solid ${!selectedPromo?C.brand:C.line}`,background:!selectedPromo?C.brandLight:C.white,color:!selectedPromo?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12}}>ไม่ใช้</button>
@@ -19131,6 +19226,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           {discType==="percent"&&<div style={{display:"flex",gap:3}}>{[5,10,15,20].map(p=><button key={p} onClick={()=>setDiscValue(p)} style={{padding:"5px 8px",border:`1px solid ${C.line}`,background:C.white,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600,color:C.ink3}}>{p}%</button>)}</div>}
         </div>}
 
+        </div>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>💸 วิธีชำระเงิน</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(108px,1fr))",gap:6,marginBottom:14}}>
           {PAY_METHODS.map(m=>{const sel=payMethod===m.v;return <button key={m.v} onClick={()=>setPayMethod(m.v)} style={{padding:"10px 6px",borderRadius:10,border:`2px solid ${sel?m.c:C.line}`,background:sel?`${m.c}15`:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:11,color:sel?m.c:C.ink2,display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .15s"}}>
@@ -19175,7 +19271,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         </div>
         <div style={{display:"flex",gap:10,alignItems:"stretch"}}>
           <Btn v="primary" onClick={onPrintQR} icon={I.print}
-            s={{flex:"1 1 44%",padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>พิมพ์ QR จ่ายเงิน</Btn>
+            s={{flex:"1 1 44%",padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>{payWait?"พิมพ์ QR ซ้ำ":"พิมพ์ QR จ่ายเงิน"}</Btn>
           <Btn v="success" onClick={onPay} loading={saving} icon={I.check}
             s={{flex:"1 1 56%",padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>✅ ยืนยันชำระ & พิมพ์ใบเสร็จ</Btn>
         </div>
@@ -19472,7 +19568,10 @@ function CustomerPage({branchId,tableId,token}){
   function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length)&&!isLineLocked(i.line_uid));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m)}];});}
   // Add-on options: open the picker if the menu has any for this branch.
   const[optPick,setOptPick]=useState(null);
-  function pickOrAddCart(m){if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);}
+  function pickOrAddCart(m){
+    if(payWaiting){setPayWaitMsg(true);return;}   // รอชำระเงินอยู่ ห้ามสั่งเพิ่ม
+    if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);
+  }
   function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m)}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
@@ -19503,13 +19602,23 @@ function CustomerPage({branchId,tableId,token}){
       writeOutbox({lines:sending,at:Date.now()});
       setCart(p=>p.filter(l=>!(l&&l.line_uid&&sendingUids.has(l.line_uid))));
       // Atomic append (compare-and-set + retry) — สั่งพร้อมกันหลายคนโต๊ะเดียวไม่ทับกัน, ไม่มีรายการหาย
-      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:sending,ordered_by:"customer"});
+      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:sending,ordered_by:"customer",blockIfAwaiting:true});
       markSent(sending);
       writeOutbox(null);
       setDone(true);
       loadMyOrder();
     }catch(e){
       console.error("placeOrder",e);
+      // รอชำระเงินอยู่ = ปฏิเสธถาวร ไม่ใช่เน็ตสะดุด ต้องเลิกลองใหม่และคืนของกลับตะกร้า
+      // ไม่งั้นคิวออฟไลน์จะวนส่งไม่จบ และลูกค้าเสียของที่เลือกไว้ทั้งหมด
+      if(e&&e.awaitingPayment){
+        writeOutbox(null);setOutbox(null);
+        setCart(p=>[...sending,...p]);
+        setPayWaitMsg(true);
+        setSending(false);
+        loadMyOrder();
+        return;
+      }
       // Do NOT clear the cart and do NOT drop the outbox — it retries on reconnect. Re-sending is
       // safe: the append ignores any line_uid the order already carries.
       setOutbox(readOutbox());
@@ -19526,16 +19635,23 @@ function CustomerPage({branchId,tableId,token}){
   // Retry whatever is stuck in the outbox: on mount, whenever the browser says we're back online,
   // and when the diner taps "ลองอีกครั้ง".
   const flushingRef=useRef(false);
+  // รอชำระเงินอยู่ไหม — โพลล์บิลทุก 45 วินาที และเช็คซ้ำตอนกดส่ง
+  const payWaiting=!!myOrder&&myOrder.status==="awaiting_payment";
+  const[payWaitMsg,setPayWaitMsg]=useState(false);
+  useEffect(()=>{if(payWaiting)setPayWaitMsg(true);},[payWaiting]);
   async function flushOutbox(){
     const o=readOutbox();
     if(!o||flushingRef.current)return;      // ref, not state — the interval/online/mount triggers
     flushingRef.current=true;               // can otherwise all pass a stale `outboxBusy` at once
     setOutboxBusy(true);
     try{
-      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:o.lines,ordered_by:"customer"});
+      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:o.lines,ordered_by:"customer",blockIfAwaiting:true});
       markSent(o.lines);
       writeOutbox(null);setDone(true);loadMyOrder();
-    }catch(e){console.error("flushOutbox",e);}
+    }catch(e){
+      console.error("flushOutbox",e);
+      if(e&&e.awaitingPayment){writeOutbox(null);setOutbox(null);setPayWaitMsg(true);loadMyOrder();}
+    }
     flushingRef.current=false;
     setOutboxBusy(false);
   }
@@ -19603,6 +19719,10 @@ function CustomerPage({branchId,tableId,token}){
         {myOrder&&step!=="myorder"&&<button onClick={()=>{loadMyOrder();setStep("myorder");}} style={{background:"rgba(255,255,255,0.22)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:12,padding:"8px 11px",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,display:"flex",alignItems:"center",gap:5}}>📋 สรุปยอด<span style={{background:"rgba(255,255,255,0.32)",borderRadius:10,minWidth:19,height:19,padding:"0 5px",fontSize:11.5,fontWeight:900,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{myOrderItemCount}</span></button>}
       </div>
     </div>
+    {payWaiting&&<div style={{background:"#F5F3FF",borderBottom:`2px solid ${C.purple}`,padding:"9px 14px",flexShrink:0,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{fontSize:13,fontWeight:900,color:C.purple}}>🔒 กำลังรอการชำระเงิน</div>
+      <div style={{fontSize:11.5,color:C.purple,marginTop:2,lineHeight:1.5,opacity:.9}}>ยอดถูกล็อกไว้แล้ว สั่งเพิ่มไม่ได้ · ถ้าต้องการสั่งเพิ่ม กรุณาแจ้งพนักงาน</div>
+    </div>}
     {step==="menu"&&<>
       <div style={{padding:"8px 10px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
@@ -19625,7 +19745,7 @@ function CustomerPage({branchId,tableId,token}){
                 :(inC&&!hasOpts)?<div style={{display:"flex",alignItems:"center",gap:5}}>
                 <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:30,height:30,borderRadius:8,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12} c={C.brand}/></button>
                 <span style={{fontWeight:900,fontSize:14,minWidth:16,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
-                <button onClick={()=>addToCart(m)} style={{width:30,height:30,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12} c={C.white}/></button>
+                <button onClick={()=>{if(payWaiting){setPayWaitMsg(true);return;}addToCart(m);}} style={{width:30,height:30,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12} c={C.white}/></button>
               </div>:<button onClick={()=>pickOrAddCart(m)} style={{width:34,height:34,borderRadius:10,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.plus} s={18} c={C.white}/></button>}
             </div>
           </div>
@@ -19685,7 +19805,7 @@ function CustomerPage({branchId,tableId,token}){
           :<div style={{padding:"13px 14px",background:C.brandLight,border:`1.5px solid ${C.brandBorder}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
             <div style={{fontSize:14.5,fontWeight:900,color:C.brand,lineHeight:1.5}}>📲 กรุณานำ QR Code ไปชำระเงินที่แคชเชียร์</div>
           </div>}
-        {myOrder&&myOrder.status!=="paid"&&<Btn onClick={()=>setStep("menu")} full icon={I.plus} s={{padding:"12px",fontSize:15,fontWeight:900}}>สั่งเพิ่ม</Btn>}
+        {myOrder&&myOrder.status!=="paid"&&!payWaiting&&<Btn onClick={()=>setStep("menu")} full icon={I.plus} s={{padding:"12px",fontSize:15,fontWeight:900}}>สั่งเพิ่ม</Btn>}
       </div>
     </>}
     {step==="cart"&&<>
@@ -19708,9 +19828,22 @@ function CustomerPage({branchId,tableId,token}){
       </div>
       <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0}}>
         <Btn v="ghost" onClick={()=>setStep("menu")} full s={{padding:"10px"}}>← เพิ่มเมนู</Btn>
-        <Btn v="success" onClick={placeOrder} loading={sending} full s={{padding:"10px"}} icon={I.check}>ยืนยันสั่งอาหาร</Btn>
+        <Btn v="success" onClick={()=>{if(payWaiting){setPayWaitMsg(true);return;}placeOrder();}} loading={sending} disabled={payWaiting} full s={{padding:"10px"}} icon={I.check}>{payWaiting?"รอชำระเงินอยู่":"ยืนยันสั่งอาหาร"}</Btn>
       </div>
     </>}
+    {/* รอชำระเงิน — ต้องเป็นป็อปอัพ ไม่ใช่แถบเล็กๆ ลูกค้าจะได้ไม่กดสั่งซ้ำแล้วงงว่าทำไมไม่เข้า */}
+    {payWaitMsg&&payWaiting&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+      <div style={{background:C.white,borderRadius:18,padding:"26px 22px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:46,marginBottom:8}}>🧾</div>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:7}}>กำลังรอการชำระเงิน</div>
+        <div style={{fontSize:13.5,color:C.ink3,lineHeight:1.75,marginBottom:18}}>
+          พนักงานออกใบแจ้งยอดให้แล้ว และยอดถูกล็อกไว้เรียบร้อย<br/>
+          <b style={{color:C.ink}}>ตอนนี้สั่งอาหารเพิ่มไม่ได้</b><br/>
+          ถ้าต้องการสั่งเพิ่ม กรุณาแจ้งพนักงานที่โต๊ะ
+        </div>
+        <Btn onClick={()=>setPayWaitMsg(false)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
+      </div>
+    </div>}
     {noteIdx!==null&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}}>
       <div style={{background:C.white,borderRadius:14,padding:18,width:300}}>
         <div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>หมายเหตุ: {cart[noteIdx]?.name}</div>

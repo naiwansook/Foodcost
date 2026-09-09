@@ -1189,6 +1189,109 @@ section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเ�
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// พิมพ์ QR จ่ายเงินแล้ว = โต๊ะเข้าสถานะ "รอชำระเงิน"
+// เจ้าของสั่ง 9 ก.ย. 69: โต๊ะต้องเปลี่ยนสีให้พนักงานรู้ว่าต้องมากดยืนยัน · ส่วนลดต้องล็อก
+// (กลับมาแล้วกดยืนยันได้ทันที ยอดตรงกับ QR ที่ลูกค้าถืออยู่) · ลูกค้าสั่งเพิ่มไม่ได้
+// แต่พนักงานยังเพิ่ม/ลบเมนูได้อยู่ เผื่อลูกค้ามาเช็คเมนูก่อนจ่าย
+// ══════════════════════════════════════════════════════════════════════════
+section("รอชำระเงิน: ล็อกยอด · โต๊ะเปลี่ยนสี · ลูกค้าสั่งเพิ่มไม่ได้");
+let _payOk = false;
+try {
+  // ดึง posAppendItems ตัวจริงมารัน — กติกา "ใครถูกบล็อก" ต้องพิสูจน์ด้วยการเรียก ไม่ใช่ค้นข้อความ
+  const head = "  posAppendItems: async ({";
+  const st = APP.indexOf(head);
+  if (st < 0) throw new Error("ไม่เจอ posAppendItems");
+  let d = 0, en = -1;
+  for (let j = APP.indexOf("{", APP.indexOf("=> {", st)); j < APP.length; j++) {
+    if (APP[j] === "{") d++;
+    else if (APP[j] === "}") { d--; if (!d) { en = j + 1; break; } }
+  }
+  const expr = APP.slice(st + "  posAppendItems: ".length, en);
+
+  const mk = (order) => {
+    const calls = [];
+    const sb = async (path, opt) => {
+      calls.push({ path, method: (opt && opt.method) || "GET" });
+      if (/^tables\?/.test(path)) return [{ table_number: "C7" }];
+      if (!opt) return order ? [order] : [];                       // SELECT บิลที่เปิดอยู่
+      if (opt.method === "PATCH") return [{ ...order, ...JSON.parse(opt.body) }];
+      if (opt.method === "POST") return [{ id: 99, ...JSON.parse(opt.body) }];
+      return [];
+    };
+    const fn = new Function("sb", "const posAppendItems = " + expr + "; return posAppendItems;")(sb);
+    return { fn, calls };
+  };
+  const LINE = [{ line_uid: "new1", menu_id: 5, name: "หมูสไลด์", price: 100, qty: 1, category: "หมูกระทะ" }];
+  const OPEN = { id: 7, items: [], status: "pending", updated_at: "t0" };
+  const WAIT = { id: 7, items: [], status: "awaiting_payment", updated_at: "t0" };
+
+  // ลูกค้าสแกน: บิลรอชำระอยู่ → ต้องถูกปฏิเสธ และห้ามเขียนอะไรลงบิลเลย
+  {
+    const { fn, calls } = mk(WAIT);
+    let err = null;
+    try { await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: LINE, ordered_by: "customer", blockIfAwaiting: true }); }
+    catch (e) { err = e; }
+    ok_("ลูกค้าสั่งเพิ่มตอนรอชำระ = ถูกปฏิเสธ", !!err && err.awaitingPayment === true);
+    ck("ถูกปฏิเสธแล้วต้องไม่เขียนอะไรลงบิลเลย", calls.filter(c => c.method !== "GET").length, 0);
+  }
+  // พนักงาน: บิลเดียวกัน ต้องเพิ่มได้ปกติ (เจ้าของสั่งไว้ — เผื่อลูกค้ามาเช็คเมนูก่อนจ่าย)
+  {
+    const { fn, calls } = mk(WAIT);
+    const row = await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: LINE, ordered_by: "ผึ้ง" });
+    ok_("พนักงานยังเพิ่มเมนูได้ตอนรอชำระ", !!row && Array.isArray(row.items) && row.items.length === 1);
+    ck("และเขียนลงบิลจริง", calls.some(c => c.method === "PATCH"), true);
+  }
+  // บิลปกติ: ลูกค้าสั่งได้เหมือนเดิม ธงไม่ได้ไปบล็อกมั่ว
+  {
+    const { fn } = mk(OPEN);
+    const row = await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: LINE, ordered_by: "customer", blockIfAwaiting: true });
+    ok_("บิลปกติลูกค้ายังสั่งได้เหมือนเดิม", !!row && Array.isArray(row.items) && row.items.length === 1);
+  }
+  _payOk = true;
+} catch (e) {
+  ok_("ดึง posAppendItems มารันได้ (" + String(e && e.message).slice(0, 60) + ")", false);
+}
+ok_("ด่านชุดรอชำระเงินรันจนจบ", _payOk);
+{
+  // ทั้งสองทางที่หน้าลูกค้าส่งออเดอร์ต้องผ่านด่านเดียวกัน — คิวออฟไลน์ก็ด้วย
+  ok_("หน้าลูกค้าส่งธงกันสั่งเพิ่มทั้งสองทาง (กดสั่ง + คิวออฟไลน์)",
+    APP.split('ordered_by:"customer",blockIfAwaiting:true').length - 1 === 2);
+  ok_("จอพนักงานไม่ส่งธงนั้น (ต้องเพิ่ม/ลบได้อยู่)",
+    APP.includes("ordered_by:currentUser.username})") && !APP.includes("ordered_by:currentUser.username,blockIfAwaiting"));
+  // ถูกปฏิเสธเพราะรอชำระ ≠ เน็ตสะดุด ห้ามวนส่งใหม่ และห้ามทำของในตะกร้าหาย
+  ok_("โดนปฏิเสธแล้วเลิกวนส่ง และคืนของกลับตะกร้า",
+    APP.includes("if(e&&e.awaitingPayment){") && APP.includes("setCart(p=>[...sending,...p]);")
+    && APP.includes("writeOutbox(null);setOutbox(null);setPayWaitMsg(true);loadMyOrder();"));
+
+  // ── โต๊ะเปลี่ยนสี ──
+  ok_("ผังโต๊ะมีสถานะรอชำระเงินเป็นสีของตัวเอง",
+    APP.includes('waitpay:  {bg:C.purpleLight,border:C.purple,text:C.purple,label:"รอชำระเงิน"}')
+    && APP.includes('if(o.status==="awaiting_payment")return "waitpay";'));
+
+  // ── ล็อกส่วนลด ──
+  ok_("พิมพ์ QR แล้วล็อกสถานะ+ยอดไว้ที่ตัวบิล", APP.includes("const row=await api.setPayWaiting(existingOrder.id,verRef.current,lock);"));
+  ok_("ล็อกเก็บส่วนลด/โปรฯ/ยอด ครบพอให้กลับมากดยืนยันได้ทันที",
+    APP.includes("disc_mode:discMode,disc_type:discType,disc_value:+discValue||0,item_disc:itemDisc,")
+    && APP.includes("promo_id:selectedPromoId??null"));
+  ok_("เปิดโต๊ะกลับมาแล้วตั้งส่วนลดคืนจากที่ล็อกไว้", APP.includes("const L=existingOrder&&existingOrder.pay_lock;"));
+  ok_("ล็อกแล้วระบบห้ามเลือกโปรฯ ให้เอง (ยอดจะเพี้ยนจาก QR)", APP.includes("if(payWait)return;   // ล็อกยอดไว้แล้ว"));
+  ok_("ล็อกแล้วกดแก้ส่วนลดไม่ได้จริง ไม่ใช่แค่ขึ้นข้อความ", APP.includes('pointerEvents:payWait?"none":"auto"'));
+  ok_("ยอดเปลี่ยนหลังพิมพ์ QR ต้องเตือนให้พิมพ์ใหม่", APP.includes("ไม่ตรงกับยอดบน QR"));
+  ok_("มีทางปลดล็อก (กดพิมพ์ผิดโต๊ะต้องมีทางออก)", APP.includes("async function unlockPayWait(){"));
+  // เขียนทับบิลที่เพิ่งถูกปิด/ถูกแก้จากเครื่องอื่นไม่ได้
+  ok_("ล็อกยอดแบบกันชนกัน (เขียนต่อเมื่อบิลยังไม่ถูกแก้และยังไม่ถูกปิด)",
+    APP.includes("const q = `orders?id=eq.${id}&updated_at=${guard}&status=neq.paid&status=neq.cancelled`;"));
+  ok_("ยังไม่ได้เพิ่มคอลัมน์ pay_lock ก็ต้องล็อกสถานะให้ได้อยู่",
+    APP.includes("const {pay_lock, ...rest} = body;") && APP.includes("_noLockCol:true"));
+
+  // ── หน้าลูกค้า ──
+  ok_("หน้าลูกค้าขึ้นป็อปอัพว่ากำลังรอชำระเงิน", APP.includes("{payWaitMsg&&payWaiting&&<div style={{position:\"fixed\"") && APP.includes("ตอนนี้สั่งอาหารเพิ่มไม่ได้"));
+  ok_("หน้าลูกค้ามีแถบค้างบนหัวจอด้วย ไม่ใช่เห็นแค่ตอนเด้ง", APP.includes("🔒 กำลังรอการชำระเงิน"));
+  ok_("ปุ่มยืนยันสั่งอาหารกดไม่ได้ตอนรอชำระ", APP.includes('disabled={payWaiting} full s={{padding:"10px"}}'));
+  ok_("กดการ์ดเมนูตอนรอชำระ = เด้งบอก ไม่ใช่เงียบ", APP.includes("if(payWaiting){setPayWaitMsg(true);return;}   // รอชำระเงินอยู่ ห้ามสั่งเพิ่ม"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // จอสั่งอาหาร: ของที่ "เพิ่งกดเพิ่ม" ต้องเห็นชัด และปุ่มส่งครัวต้องติดตามนั้นเสมอ
 // เจ้าของแจ้ง 9 ก.ย. 69: กดเลือกเมนูแล้วสีส้มจางเกินจนแยกไม่ออก และปุ่มส่งเข้าครัว
 // ไม่ทำงานกับเมนูที่เพิ่งกดสั่งเพิ่ม
