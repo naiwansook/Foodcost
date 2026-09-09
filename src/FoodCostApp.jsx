@@ -674,6 +674,12 @@ const api = {
   // POS Settings (per-branch VAT, Service Charge, PromptPay, Receipt)
   getPOSSettings: (bid) => sb(`pos_settings?branch_id=eq.${bid}&limit=1`),
   upsertPOSSettings: (d) => sb("pos_settings", {method:"POST", body:JSON.stringify(d), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}}),
+  // แก้เฉพาะลำดับหมวด — ห้าม upsert ทั้งแถว ไม่งั้นทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้
+  setCategoryOrder: async (bid, order) => {
+    const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify({category_order:order})});
+    if(Array.isArray(r)&&r.length)return r[0];
+    return await sb("pos_settings", {method:"POST", body:JSON.stringify({branch_id:bid,category_order:order}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
+  },
   // Promotions
   getPromotions: (bid) => sb(`promotions?or=(branch_id.eq.${bid},branch_id.is.null)&order=sort_order.asc`),
   addPromotion: (d) => sb("promotions", {method:"POST", body:JSON.stringify(d)}),
@@ -1430,6 +1436,18 @@ const menuCatOf=(m)=>{const c=String((m&&m.category)||"").trim();return c||null;
 // สร้าง Collator ไว้ตัวเดียวใช้ซ้ำ — สร้างใหม่ทุกครั้งที่เทียบจะช้ามากเมื่อรายการยาว
 const _thColl=new Intl.Collator("th",{numeric:true});
 const thCmp=(a,b)=>_thColl.compare(String(a==null?"":a),String(b==null?"":b));
+// ลำดับหมวดหมู่ที่ร้านจัดเอง — เก็บเป็นรายชื่อเรียงลำดับใน pos_settings.category_order
+// เก็บที่นั่นเพราะทั้งจอขาย จอจัดการเมนู และหน้าลูกค้าสแกน อ่าน pos_settings อยู่แล้ว
+// ทั้งสามจอจึงเรียงตรงกันเองโดยไม่ต้องซิงก์อะไรเพิ่ม (เจ้าของสั่ง "ให้ตรงกับที่ลูกค้าสแกนด้วย")
+// ไม่ใช้ตาราง categories เพราะข้อมูลจริงไม่ครบ: 7 หมวดที่เมนูใช้อยู่ไม่มีแถวเลย
+// และอีก 4 หมวดมีแถวซ้ำ 2 แถว — เก็บลำดับที่นั่นจะจัดไม่ได้บางหมวดและต้องอัปเดตหลายแถวให้ตรงกัน
+// หมวดที่ไม่อยู่ในรายการ (ครัวกลางเพิ่งเพิ่มมา) ไปต่อท้ายแล้วเรียงตามตัวอักษรไทย
+// ยังไม่เคยจัดลำดับ = เรียงไทยล้วน เหมือนพฤติกรรมเดิมทุกประการ
+const catOrderOf=(s)=>{const a=s&&s.category_order;return Array.isArray(a)?a.map(String):[];};
+const catSorter=(order)=>{
+  const r=new Map((order||[]).map((n,i)=>[String(n),i]));
+  return (a,b)=>{const ia=r.has(a)?r.get(a):Infinity,ib=r.has(b)?r.get(b):Infinity;return ia!==ib?ia-ib:thCmp(a,b);};
+};
 // แบ่งยอดเท่ากัน n คน — คิดเป็นสตางค์เพื่อให้ "บวกกลับได้เท่าเดิมเป๊ะ"
 // หารไม่ลงตัวเป็นเรื่องปกติ (฿1000 / 3) เศษสตางค์ต้องไปตกอยู่กับใครสักคน
 // ไม่ใช่หายไปเฉยๆ — ร้านจะเก็บเงินขาดทุกบิลที่หารไม่ลง
@@ -18344,8 +18362,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   const bidSale=branch?.id;
   const cats=useMemo(()=>{
-    return ["ทั้งหมด",...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)).map(menuCatOf).filter(Boolean))];
-  },[menus,bidSale]);
+    const seen=[...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)).map(menuCatOf).filter(Boolean))];
+    return ["ทั้งหมด",...seen.sort(catSorter(catOrderOf(posSettings)))];
+  },[menus,bidSale,posSettings]);
   const filtered=useMemo(()=>{
     return menus.filter(m=>{
       if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
@@ -19266,7 +19285,7 @@ function CustomerPage({branchId,tableId,token}){
   },[branchId,tableId,token,gateTry]);
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
-  const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(menuCatOf).filter(Boolean))],[menus]);
+  const cats=useMemo(()=>["ทั้งหมด",...[...new Set(menus.map(menuCatOf).filter(Boolean))].sort(catSorter(catOrderOf(posCfg)))],[menus,posCfg]);
   const filtered=useMemo(()=>menus.filter(m=>{
     const c=menuCatOf(m);
     if(!c)return false;                                    // ยังไม่จัดหมวด → ลูกค้าไม่เห็น
@@ -20524,6 +20543,11 @@ function POSMenuAvailManager({currentBranch,onClose}){
   const isCentral=currentBranch?.type==="central";
   const[menus,setMenus]=useState([]);const[lib,setLib]=useState([]);const[loading,setLoading]=useState(true);
   const[q,setQ]=useState("");const[busyId,setBusyId]=useState(null);
+  const[catOrder,setCatOrder]=useState([]);      // ลำดับหมวดที่ร้านจัดเอง (ชื่อเรียงตามลำดับ)
+  const[drag,setDrag]=useState(null);            // {from,to,names} ระหว่างลากอยู่
+  const dragRef=useRef(null);                    // อ่านค่าล่าสุดใน event handler ที่ผูกไว้ครั้งเดียว
+  const holdRef=useRef(null);                    // ตัวจับเวลากดค้าง
+  const rowRef=useRef(null);
   const[cat,setCat]=useState("");   // "" = ทุกหมวด · หมวดมาจากครัวกลาง สาขาแก้ไม่ได้
   const[bindMenu,setBindMenu]=useState(null);const[bindSel,setBindSel]=useState({});const[bindBusy,setBindBusy]=useState(false);
   const[bulkOpen,setBulkOpen]=useState(false);const[bulkGroups,setBulkGroups]=useState({});const[bulkMenus,setBulkMenus]=useState({});const[bulkBusy,setBulkBusy]=useState(false);
@@ -20533,6 +20557,58 @@ function POSMenuAvailManager({currentBranch,onClose}){
   async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);}
   // หมวดที่มีอยู่จริงในเมนูของสาขานี้ — ไม่เอาหมวดของสาขาอื่นมาให้กดแล้วว่างเปล่า
   // นับจำนวนเมนูต่อหมวดไว้ด้วย จะได้รู้ว่ากดแล้วเจออะไรบ้างโดยไม่ต้องกดลองทีละอัน
+  useEffect(()=>{let ok=true;(async()=>{
+    try{const r=await api.getPOSSettings(currentBranch.id);if(ok)setCatOrder(catOrderOf(r&&r[0]));}catch{}
+  })();return()=>{ok=false;};},[currentBranch.id]);
+
+  // ลากสลับตำแหน่ง: กดค้างที่ชิปหมวดแล้วลากซ้าย-ขวา
+  // กดค้างก่อนถึงจะเริ่มลาก ไม่งั้นการปัดเลื่อนแถบหมวดจะกลายเป็นการลากสลับโดยไม่ตั้งใจ
+  // ขยับเกิน 8px ก่อนครบเวลา = ตั้งใจปัดเลื่อน ไม่ใช่จะลาก → ยกเลิกตัวจับเวลา
+  const HOLD_MS=350;
+  function orderedNames(){ return catList.map(([c])=>c); }
+  function beginHold(e,name){
+    if(e.pointerType==="mouse"&&e.button!==0)return;
+    const sx=e.clientX,sy=e.clientY;
+    const el=e.currentTarget;
+    const cancel=(ev)=>{if(Math.abs(ev.clientX-sx)>8||Math.abs(ev.clientY-sy)>8)clear();};
+    const clear=()=>{if(holdRef.current){clearTimeout(holdRef.current);holdRef.current=null;}
+      el.removeEventListener("pointermove",cancel);el.removeEventListener("pointerup",clear);el.removeEventListener("pointercancel",clear);};
+    el.addEventListener("pointermove",cancel);el.addEventListener("pointerup",clear);el.addEventListener("pointercancel",clear);
+    holdRef.current=setTimeout(()=>{
+      clear();
+      const names=orderedNames();const from=names.indexOf(name);
+      if(from<0)return;
+      try{el.setPointerCapture(e.pointerId);}catch{}
+      if(navigator.vibrate)try{navigator.vibrate(12);}catch{}   // บอกด้วยการสั่นว่าจับได้แล้ว
+      const st={from,to:from,names};dragRef.current=st;setDrag(st);
+    },HOLD_MS);
+  }
+  function moveDrag(e){
+    const d=dragRef.current;if(!d||!rowRef.current)return;
+    e.preventDefault();
+    // หาว่านิ้วอยู่เหนือชิปใบไหน จากกึ่งกลางของแต่ละใบ (อ่านจาก DOM จริง ไม่เดาความกว้าง)
+    const chips=[...rowRef.current.querySelectorAll("[data-cat]")];
+    let to=d.to;
+    for(let i=0;i<chips.length;i++){const r=chips[i].getBoundingClientRect();
+      if(e.clientX>=r.left&&e.clientX<=r.right){to=i;break;}
+      if(i===0&&e.clientX<r.left)to=0;
+      if(i===chips.length-1&&e.clientX>r.right)to=chips.length-1;}
+    if(to!==d.to){const st={...d,to};dragRef.current=st;setDrag(st);}
+  }
+  async function endDrag(){
+    const d=dragRef.current;dragRef.current=null;setDrag(null);
+    if(!d||d.to===d.from)return;
+    const names=[...d.names];const[moved]=names.splice(d.from,1);names.splice(d.to,0,moved);
+    setCatOrder(names);                                  // ให้จอขยับทันที ไม่ต้องรอเน็ต
+    try{ await api.setCategoryOrder(currentBranch.id,names); }
+    catch(e){ setCatOrder(catOrder); alert("บันทึกลำดับไม่สำเร็จ: "+friendlyError(e)); }
+  }
+  // ระหว่างลาก แสดงลำดับที่จะได้จริงเลย จะได้เห็นผลก่อนปล่อยนิ้ว
+  const previewNames=(()=>{
+    if(!drag)return null;
+    const n=[...drag.names];const[m]=n.splice(drag.from,1);n.splice(drag.to,0,m);return n;
+  })();
+
   const catList=(()=>{
     const m=new Map();
     for(const x of menus){
@@ -20540,7 +20616,11 @@ function POSMenuAvailManager({currentBranch,onClose}){
       const c=menuCatOf(x);if(!c)continue;
       m.set(c,(m.get(c)||0)+1);
     }
-    return [...m.entries()].sort((a,b)=>a[0].localeCompare(b[0],"th"));
+    const rows=[...m.entries()].sort((a,b)=>catSorter(catOrder)(a[0],b[0]));
+    if(!previewNames)return rows;
+    // ระหว่างลาก จัดเรียงตามตำแหน่งที่กำลังจะวาง
+    const at=new Map(previewNames.map((n,i)=>[n,i]));
+    return rows.slice().sort((a,b)=>(at.has(a[0])?at.get(a[0]):9e9)-(at.has(b[0])?at.get(b[0]):9e9));
   })();
   const AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
   function openBind(m){const sel={};const raw=((m.options_by_branch||{})[String(currentBranch.id)])||[];raw.forEach(b=>{const id=(typeof b==="string"||typeof b==="number")?b:(b&&b.id);if(id)sel[id]=true;});setBindSel(sel);setBindMenu(m);}
@@ -20572,16 +20652,26 @@ function POSMenuAvailManager({currentBranch,onClose}){
         <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{visible.length} เมนู</span>
         <Btn v="teal" onClick={()=>{setBulkGroups({});setBulkMenus({});setBulkOpen(true);}} icon={I.plus} s={{padding:"7px 13px",fontSize:12}}>🔗 ผูกหลายเมนูพร้อมกัน</Btn>
       </div>
-      {catList.length>0&&<div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:10,borderBottom:`1px solid ${C.line}`}}>
+      {catList.length>0&&<>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>
+        👆 กดค้างที่หมวดแล้วลากซ้าย-ขวา เพื่อจัดลำดับ · ลำดับนี้ใช้ทั้งจอขายและหน้าที่ลูกค้าสแกน
+      </div>
+      <div ref={rowRef} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
+        style={{display:"flex",gap:6,overflowX:drag?"hidden":"auto",paddingBottom:8,marginBottom:10,borderBottom:`1px solid ${C.line}`,touchAction:drag?"none":"pan-x"}}>
         {[["","ทั้งหมด",menus.filter(x=>isCentral||menuVisibleAt(x,currentBranch.id)).length],...catList.map(([c,n])=>[c,c,n])].map(([v,l,n])=>{
           const on=cat===v;
-          return <button key={v||"__all"} onClick={()=>setCat(v)} style={{flexShrink:0,padding:"5px 13px",borderRadius:16,cursor:"pointer",
+          const held=!!drag&&drag.names[drag.from]===v;
+          return <button key={v||"__all"} {...(v?{"data-cat":v,onPointerDown:(e)=>beginHold(e,v)}:{})}
+            onClick={()=>{if(!drag)setCat(v);}}
+            style={{flexShrink:0,padding:"5px 13px",borderRadius:16,cursor:v?"grab":"pointer",
             fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:on?800:600,whiteSpace:"nowrap",
-            border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2}}>
+            border:`1px solid ${held?C.brandDark:(on?C.brand:C.line)}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,
+            transform:held?"scale(1.08)":"none",boxShadow:held?"0 6px 16px rgba(15,23,42,.22)":"none",
+            opacity:drag&&!held?.65:1,transition:drag?"none":"transform .12s"}}>
             {l} <span style={{opacity:.7,fontSize:11}}>{n}</span>
           </button>;
         })}
-      </div>}
+      </div></>}
       {visible.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
       :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto"}}>
         {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>

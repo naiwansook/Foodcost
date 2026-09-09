@@ -247,6 +247,27 @@ const tap = (g, ids) => {
 };
 const G = (n, req, pick) => ({ required: req, pick, choices: Array.from({ length: n }, (_, i) => ({ id: "c" + (i + 1) })) });
 
+// ── ดึงตัวเรียงลำดับหมวดตัวจริงมารัน ──────────────────────────────────────
+// ลำดับนี้ใช้ 3 จอ (จอเมนู จอขาย หน้าลูกค้าสแกน) ถ้าเรียงไม่ตรงกัน ลูกค้าเห็นคนละอย่าง
+// กับที่พนักงานจัดไว้ ซึ่งเป็นเหตุผลเดียวที่ทำฟีเจอร์นี้
+const catSortWith = (() => {
+  const L = APP.split("\n");
+  const a = L.find(l => l.startsWith("const catOrderOf="));
+  // catSorter กินหลายบรรทัด ต้องตัดตามวงเล็บปีกกา ไม่ใช่หยิบบรรทัดเดียว
+  const bs = APP.indexOf("const catSorter=");
+  let d = 0, started = false, be = -1;
+  for (let i = bs; i < APP.length; i++) {
+    if (APP[i] === "{") { d++; started = true; }
+    else if (APP[i] === "}") { d--; if (started && d === 0) { be = APP.indexOf(";", i) + 1; break; } }
+  }
+  const b = bs < 0 ? null : APP.slice(bs, be);
+  if (!a || !b) throw new Error("ไม่เจอตัวเรียงลำดับหมวด");
+  const th1 = L.find(l => l.startsWith("const _thColl="));
+  const th2 = L.find(l => l.startsWith("const thCmp="));
+  const f = new Function(th1 + "\n" + th2 + "\n" + a + "\n" + b + "\nreturn {catOrderOf,catSorter};")();
+  return (settings, names) => names.slice().sort(f.catSorter(f.catOrderOf(settings)));
+})();
+
 let pass = 0, fail = 0;
 const section = (t) => console.log(`\n─── ${t} ───`);
 const ck = (label, got, want) => {
@@ -857,6 +878,33 @@ const guards = [
   ["บันทึกจำนวนลงกลุ่มจริงทั้งสร้างและแก้",
     APP.includes("pick:gReq?Math.max(1,+gPick||1):1") && APP.includes("pick:eg.required?Math.max(1,+eg.pick||1):1")],
   ["เตือนเมื่อตั้งจำนวนเกินตัวเลือกที่มี", APP.includes("ลูกค้าจะสั่งไม่ได้")],
+  // ── ลำดับหมวดที่ร้านจัดเอง (ลากสลับได้) ──
+  ["ยังไม่เคยจัดลำดับ = เรียงไทยเหมือนเดิมทุกประการ",
+    catSortWith(null, ["ยำ", "กาแฟ", "ไก่ทอด"]).join("|") === "กาแฟ|ไก่ทอด|ยำ"],
+  ["จัดลำดับแล้ว หมวดที่จัดไว้มาก่อนตามลำดับที่ตั้ง",
+    catSortWith({ category_order: ["ยำ", "กาแฟ"] }, ["กาแฟ", "ไก่ทอด", "ยำ"]).join("|") === "ยำ|กาแฟ|ไก่ทอด"],
+  // หมวดใหม่ที่ครัวกลางเพิ่งเพิ่ม ยังไม่มีในลำดับ ต้องไปต่อท้าย ไม่ใช่หายไปจากจอ
+  ["หมวดที่ยังไม่ได้จัด ไปต่อท้ายและเรียงไทยกันเอง",
+    catSortWith({ category_order: ["ยำ"] }, ["ไก่ทอด", "กาแฟ", "ยำ", "ขนม"]).join("|") === "ยำ|กาแฟ|ไก่ทอด|ขนม"],
+  ["ลำดับที่อ้างถึงหมวดที่ถูกลบไปแล้ว ต้องไม่ทำให้เพี้ยน",
+    catSortWith({ category_order: ["หมวดที่ไม่มีแล้ว", "กาแฟ"] }, ["ยำ", "กาแฟ"]).join("|") === "กาแฟ|ยำ"],
+  ["ค่าที่เก็บไว้เพี้ยน (ไม่ใช่รายการ) ต้องถอยไปเรียงไทย ไม่ใช่จอพัง",
+    catSortWith({ category_order: "มั่ว" }, ["ยำ", "กาแฟ"]).join("|") === "กาแฟ|ยำ" &&
+    catSortWith({}, ["ยำ", "กาแฟ"]).join("|") === "กาแฟ|ยำ"],
+  // ทั้งสามจอต้องเรียงด้วยตัวเดียวกัน ไม่งั้นพนักงานจัดแล้วลูกค้าเห็นคนละลำดับ
+  ["ทั้งสามจอใช้ตัวเรียงเดียวกัน", APP.split("catSorter(").length - 1 === 3],
+  ["จอสั่งอาหารเรียงตามลำดับที่จัดไว้", APP.includes("seen.sort(catSorter(catOrderOf(posSettings)))")],
+  ["หน้าลูกค้าสแกนเรียงตามลำดับเดียวกัน", APP.includes("].sort(catSorter(catOrderOf(posCfg)))")],
+  ["จอเมนูทั้งหมดเรียงตามลำดับที่จัดไว้", APP.includes("catSorter(catOrder)(a[0],b[0])")],
+  // เขียนทั้งแถวจะทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้ — เงินผิดเงียบ
+  ["บันทึกลำดับแตะเฉพาะคอลัมน์ลำดับ ไม่ทับค่าอื่น",
+    APP.includes('{method:"PATCH", body:JSON.stringify({category_order:order})}')],
+  // ปัดเลื่อนแถบหมวดต้องยังทำได้ ไม่งั้นหมวดที่อยู่ท้ายๆ เข้าไม่ถึง
+  ["ต้องกดค้างก่อนถึงจะลาก ไม่ใช่แตะแล้วลากทันที", APP.includes("const HOLD_MS=350;") && APP.includes("holdRef.current=setTimeout(")],
+  ["ขยับก่อนครบเวลา = ตั้งใจปัดเลื่อน ต้องยกเลิกการลาก", APP.includes("if(Math.abs(ev.clientX-sx)>8||Math.abs(ev.clientY-sy)>8)clear();")],
+  ["ลากอยู่ต้องไม่เผลอสั่งเปลี่ยนหมวดที่กรอง", APP.includes("onClick={()=>{if(!drag)setCat(v);}}")],
+  ["บันทึกไม่สำเร็จต้องคืนลำดับเดิม ไม่ใช่ค้างที่ลำดับที่ยังไม่ได้บันทึก",
+    APP.includes("catch(e){ setCatOrder(catOrder); alert(")],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
