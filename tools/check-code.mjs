@@ -930,6 +930,18 @@ const guards = [
     && APP.includes('el.removeEventListener("touchmove",stop,{passive:false});')],
   ["ผูกตัวห้ามเลื่อนเฉพาะตอนลาก ไม่ผูกค้างไว้", APP.includes("const dragging=!!drag;") && APP.includes("if(!dragging)return;")],
   ["กันเมนูกดค้างของ iOS ที่แย่ง pointer", APP.includes("WebkitTouchCallout:\"none\"") && APP.includes("onContextMenu:(e)=>e.preventDefault()")],
+  // ── ลากแล้วต้องลื่น ไม่กระพริบ ──
+  // รอบแรกสลับลำดับจริงทุกครั้งที่นิ้วขยับ = ทั้งแถวคำนวณผังใหม่รัวๆ ภาพกระพริบลายตา
+  // ที่ถูกคือลำดับจริงอยู่นิ่ง ขยับแค่ภาพด้วย transform ซึ่งไม่ต้องคำนวณผังใหม่
+  ["ระหว่างลากไม่จัดเรียงลำดับจริงใหม่",
+    !APP.includes("const previewNames=") && APP.includes("// ลำดับนี้เปลี่ยนเฉพาะตอนปล่อยนิ้ว")],
+  ["ขยับภาพด้วย transform ไม่ใช่สลับตำแหน่ง", APP.includes("el.style.transform=x?")],
+  // อ่านตำแหน่งจาก DOM ทุกเฟรม = บังคับเบราว์เซอร์คำนวณผังใหม่ทุกเฟรม (ตัวการทำให้หนืด)
+  ["วัดตำแหน่งชิปครั้งเดียวตอนเริ่มจับ ไม่วัดซ้ำทุกเฟรม",
+    APP.includes("const rects=chips.map(c=>{const r=c.getBoundingClientRect();")],
+  ["ไม่เรนเดอร์ใหม่ระหว่างลาก (เขียน DOM ตรงๆ)", APP.includes("if(!d.raf)d.raf=requestAnimationFrame(")],
+  ["ใบที่จับตามนิ้วไม่มีหน่วง ใบอื่นไถลหลบ", APP.includes('el.style.transition=i===d.from?"none":"transform .18s')],
+  ["ปล่อยนิ้วแล้วล้าง transform ทิ้งทั้งหมด", APP.includes('d.chips.forEach(el=>{el.style.transform="";')],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];

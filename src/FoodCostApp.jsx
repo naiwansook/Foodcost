@@ -20566,6 +20566,26 @@ function POSMenuAvailManager({currentBranch,onClose}){
   // ขยับเกิน 8px ก่อนครบเวลา = ตั้งใจปัดเลื่อน ไม่ใช่จะลาก → ยกเลิกตัวจับเวลา
   const HOLD_MS=350;
   function orderedNames(){ return catList.map(([c])=>c); }
+  // ระหว่างลาก "ไม่สลับตำแหน่งจริง" แม้แต่ครั้งเดียว
+  // รอบก่อนสลับลำดับจริงทุกครั้งที่นิ้วขยับ ชิปเลยกระโดดสลับที่รัวๆ และเพราะความกว้าง
+  // แต่ละใบไม่เท่ากัน ทั้งแถวจึงขยับตามทุกครั้ง = ภาพกระพริบลายตา
+  // วิธีที่ถูก: ลำดับจริงอยู่นิ่ง ขยับแค่ "ภาพ" ด้วย transform ซึ่งไม่ต้องคำนวณผังใหม่
+  // ใบที่จับอยู่วิ่งตามนิ้วแบบไม่มีหน่วง · ใบอื่นไถลหลบด้วย transition สั้นๆ
+  // แล้วค่อยสลับลำดับจริงครั้งเดียวตอนปล่อยนิ้ว
+  const GAP=6;
+  function paint(){
+    const d=dragRef.current;if(!d)return;
+    const w=d.rects[d.from].w+GAP;
+    d.chips.forEach((el,i)=>{
+      let x=0;
+      if(i===d.from)x=d.dx;
+      else if(d.from<d.to&&i>d.from&&i<=d.to)x=-w;
+      else if(d.from>d.to&&i>=d.to&&i<d.from)x=w;
+      el.style.transform=x?`translate3d(${x}px,0,0)`+(i===d.from?" scale(1.06)":""):(i===d.from?"scale(1.06)":"");
+      el.style.transition=i===d.from?"none":"transform .18s cubic-bezier(.2,.7,.3,1)";
+      if(i===d.from){el.style.zIndex="5";el.style.boxShadow="0 8px 20px rgba(15,23,42,.25)";}
+    });
+  }
   function beginHold(e,name){
     if(e.pointerType==="mouse"&&e.button!==0)return;
     const sx=e.clientX,sy=e.clientY;
@@ -20577,26 +20597,35 @@ function POSMenuAvailManager({currentBranch,onClose}){
     holdRef.current=setTimeout(()=>{
       clear();
       const names=orderedNames();const from=names.indexOf(name);
-      if(from<0)return;
+      if(from<0||!rowRef.current)return;
+      // วัดตำแหน่งทุกใบครั้งเดียวตอนเริ่มจับ — ระหว่างลากลำดับจริงไม่ขยับ ค่าจึงใช้ได้ตลอด
+      // (ถ้าไปวัดใหม่ทุกครั้งที่นิ้วขยับ จะเป็นการบังคับให้เบราว์เซอร์คำนวณผังใหม่ทุกเฟรม)
+      const chips=[...rowRef.current.querySelectorAll("[data-cat]")];
+      const rects=chips.map(c=>{const r=c.getBoundingClientRect();return {c:r.left+r.width/2,w:r.width};});
       try{el.setPointerCapture(e.pointerId);}catch{}
       if(navigator.vibrate)try{navigator.vibrate(12);}catch{}   // บอกด้วยการสั่นว่าจับได้แล้ว
-      const st={from,to:from,names};dragRef.current=st;setDrag(st);
+      dragRef.current={from,to:from,names,chips,rects,sx,dx:0};
+      setDrag(true);
+      paint();
     },HOLD_MS);
   }
   function moveDrag(e){
-    const d=dragRef.current;if(!d||!rowRef.current)return;
+    const d=dragRef.current;if(!d)return;
     e.preventDefault();
-    // หาว่านิ้วอยู่เหนือชิปใบไหน จากกึ่งกลางของแต่ละใบ (อ่านจาก DOM จริง ไม่เดาความกว้าง)
-    const chips=[...rowRef.current.querySelectorAll("[data-cat]")];
-    let to=d.to;
-    for(let i=0;i<chips.length;i++){const r=chips[i].getBoundingClientRect();
-      if(e.clientX>=r.left&&e.clientX<=r.right){to=i;break;}
-      if(i===0&&e.clientX<r.left)to=0;
-      if(i===chips.length-1&&e.clientX>r.right)to=chips.length-1;}
-    if(to!==d.to){const st={...d,to};dragRef.current=st;setDrag(st);}
+    d.dx=e.clientX-d.sx;
+    // ใบที่จับอยู่ไปหยุดตรงไหน แล้วเทียบกับกึ่งกลางของใบอื่น (ที่วัดไว้ตั้งแต่ต้น)
+    const cx=d.rects[d.from].c+d.dx;
+    let to=0;for(let i=0;i<d.rects.length;i++)if(cx>d.rects[i].c)to=i;
+    if(cx<=d.rects[0].c)to=0;
+    d.to=to;
+    // เขียน transform ลง DOM ตรงๆ ไม่ผ่าน state — ไม่มีการเรนเดอร์ใหม่แม้แต่ครั้งเดียวระหว่างลาก
+    if(!d.raf)d.raf=requestAnimationFrame(()=>{d.raf=null;paint();});
   }
   async function endDrag(){
-    const d=dragRef.current;dragRef.current=null;setDrag(null);
+    const d=dragRef.current;dragRef.current=null;
+    if(d){ if(d.raf)cancelAnimationFrame(d.raf);
+      d.chips.forEach(el=>{el.style.transform="";el.style.transition="";el.style.zIndex="";el.style.boxShadow="";}); }
+    setDrag(false);
     if(!d||d.to===d.from)return;
     const names=[...d.names];const[moved]=names.splice(d.from,1);names.splice(d.to,0,moved);
     setCatOrder(names);                                  // ให้จอขยับทันที ไม่ต้องรอเน็ต
@@ -20611,11 +20640,6 @@ function POSMenuAvailManager({currentBranch,onClose}){
     el.addEventListener("touchmove",stop,{passive:false});
     return()=>el.removeEventListener("touchmove",stop,{passive:false});
   },[dragging]);
-  // ระหว่างลาก แสดงลำดับที่จะได้จริงเลย จะได้เห็นผลก่อนปล่อยนิ้ว
-  const previewNames=(()=>{
-    if(!drag)return null;
-    const n=[...drag.names];const[m]=n.splice(drag.from,1);n.splice(drag.to,0,m);return n;
-  })();
 
   const catList=(()=>{
     const m=new Map();
@@ -20624,11 +20648,8 @@ function POSMenuAvailManager({currentBranch,onClose}){
       const c=menuCatOf(x);if(!c)continue;
       m.set(c,(m.get(c)||0)+1);
     }
-    const rows=[...m.entries()].sort((a,b)=>catSorter(catOrder)(a[0],b[0]));
-    if(!previewNames)return rows;
-    // ระหว่างลาก จัดเรียงตามตำแหน่งที่กำลังจะวาง
-    const at=new Map(previewNames.map((n,i)=>[n,i]));
-    return rows.slice().sort((a,b)=>(at.has(a[0])?at.get(a[0]):9e9)-(at.has(b[0])?at.get(b[0]):9e9));
+    // ลำดับนี้เปลี่ยนเฉพาะตอนปล่อยนิ้ว — ระหว่างลากต้องอยู่นิ่ง ไม่งั้นภาพกระพริบ
+    return [...m.entries()].sort((a,b)=>catSorter(catOrder)(a[0],b[0]));
   })();
   const AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
   function openBind(m){const sel={};const raw=((m.options_by_branch||{})[String(currentBranch.id)])||[];raw.forEach(b=>{const id=(typeof b==="string"||typeof b==="number")?b:(b&&b.id);if(id)sel[id]=true;});setBindSel(sel);setBindMenu(m);}
@@ -20668,15 +20689,12 @@ function POSMenuAvailManager({currentBranch,onClose}){
         style={{display:"flex",gap:6,overflowX:drag?"hidden":"auto",paddingBottom:8,marginBottom:10,borderBottom:`1px solid ${C.line}`,touchAction:drag?"none":"pan-x"}}>
         {[["","ทั้งหมด",menus.filter(x=>isCentral||menuVisibleAt(x,currentBranch.id)).length],...catList.map(([c,n])=>[c,c,n])].map(([v,l,n])=>{
           const on=cat===v;
-          const held=!!drag&&drag.names[drag.from]===v;
           return <button key={v||"__all"} {...(v?{"data-cat":v,onPointerDown:(e)=>beginHold(e,v),onContextMenu:(e)=>e.preventDefault()}:{})}
             onClick={()=>{if(!drag)setCat(v);}}
-            style={{flexShrink:0,padding:"5px 13px",borderRadius:16,cursor:v?"grab":"pointer",
+            style={{flexShrink:0,padding:"5px 13px",borderRadius:16,cursor:v?"grab":"pointer",position:"relative",
             WebkitUserSelect:"none",userSelect:"none",WebkitTouchCallout:"none",
             fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:on?800:600,whiteSpace:"nowrap",
-            border:`1px solid ${held?C.brandDark:(on?C.brand:C.line)}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,
-            transform:held?"scale(1.08)":"none",boxShadow:held?"0 6px 16px rgba(15,23,42,.22)":"none",
-            opacity:drag&&!held?.65:1,transition:drag?"none":"transform .12s"}}>
+            border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2}}>
             {l} <span style={{opacity:.7,fontSize:11}}>{n}</span>
           </button>;
         })}
