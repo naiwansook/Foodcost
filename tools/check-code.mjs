@@ -1189,6 +1189,88 @@ section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเ�
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// จอสั่งอาหาร: ของที่ "เพิ่งกดเพิ่ม" ต้องเห็นชัด และปุ่มส่งครัวต้องติดตามนั้นเสมอ
+// เจ้าของแจ้ง 9 ก.ย. 69: กดเลือกเมนูแล้วสีส้มจางเกินจนแยกไม่ออก และปุ่มส่งเข้าครัว
+// ไม่ทำงานกับเมนูที่เพิ่งกดสั่งเพิ่ม
+// ต้นเหตุ: ทั้งสีและปุ่มเดาจากตัวเลข (เทียบจำนวนกับยอดที่ส่งครัวไปแล้วต่อเมนู)
+// เมนูเดียวกันอยู่ได้หลายแถว และการกดเพิ่มก็ไปบวกทับแถวที่ส่งครัวไปแล้ว
+// การเดาจึงผิดได้ทั้งสองทาง — แถวใหม่ขึ้นเขียวเหมือนส่งแล้ว / ปุ่มดับทั้งที่ยังมีของใหม่
+// คราวนี้ติดธงที่แถวตั้งแต่ตอนกด แล้วทั้งสี ปุ่ม และรายการที่ส่ง อ่านธงตัวเดียวกัน
+// ══════════════════════════════════════════════════════════════════════════
+let _addOk = false;
+section("จอสั่งอาหาร: ของใหม่ที่ยังไม่ได้ส่งครัว");
+try {
+  // ดึงตัวกดเพิ่มเมนูตัวจริงมารัน — ค้นข้อความอย่างเดียวพิสูจน์พฤติกรรมไม่ได้
+  let n = 0;
+  const src = grabConst(APP, "addItem");
+  const mkAdd = (get, set) => new Function("useCallback", "setItems", "uuidv4", "menuCatOf",
+    src + " return addItem;")(f => f, set, () => "uid" + (++n), (m) => m.category || null);
+
+  // โต๊ะนี้ส่งครัวไปแล้ว 2 จาน (มาจาก existingOrder จึงไม่มีธง _new)
+  const seed = () => [
+    { line_uid: "s1", menu_id: 10, name: "หมูสไลด์", price: 100, qty: 2, note: "", category: "หมูกระทะ" },
+    { line_uid: "s2", menu_id: 20, name: "ข้าวสวย", price: 10, qty: 1, note: "", category: "เมนูสั่งเพิ่ม" },
+  ];
+  let items = seed();
+  const add = mkAdd(() => items, (f) => { items = f(items); });
+
+  add({ id: 10, name: "หมูสไลด์", price: 100, category: "หมูกระทะ" });
+  ck("กดเมนูที่ส่งครัวไปแล้ว = ได้แถวใหม่ ไม่ไปบวกทับแถวเดิม",
+    items.map(i => [i.name, i.qty, !!i._new]),
+    [["หมูสไลด์", 2, false], ["ข้าวสวย", 1, false], ["หมูสไลด์", 1, true]]);
+
+  add({ id: 10, name: "หมูสไลด์", price: 100, category: "หมูกระทะ" });
+  ck("กดซ้ำอีกที = รวมกับแถวใหม่แถวเดิม ไม่แตกแถวเพิ่ม",
+    items.filter(i => i._new).map(i => [i.name, i.qty]), [["หมูสไลด์", 2]]);
+  ck("แถวที่ส่งครัวไปแล้วไม่ถูกแตะเลย",
+    items.filter(i => !i._new).map(i => [i.line_uid, i.qty]), [["s1", 2], ["s2", 1]]);
+
+  // ── ปุ่มส่ง กับ รายการที่ส่งจริง ต้องอ่านธงเดียวกับสีบนจอ ──
+  const clean = new Function("return ({_new,...r})=>r;")();
+  const newRows = items.filter(i => i._new && (+i.qty || 0) > 0);
+  ck("ปุ่มส่งติดเมื่อมีของใหม่", newRows.length > 0, true);
+  ck("ส่งเฉพาะของใหม่ ไม่ส่งของที่ครัวได้ไปแล้วซ้ำ",
+    newRows.map(clean).map(i => [i.name, i.qty]), [["หมูสไลด์", 2]]);
+  ck("ธงในจอไม่หลุดลงฐานข้อมูล", Object.keys(clean(items[2])).includes("_new"), false);
+  ck("รายการที่ส่งยังมี line_uid เดิมของแถว (ส่งซ้ำเพราะเน็ตสะดุดถูกกันซ้ำที่ปลายทาง)",
+    newRows.map(clean).every(i => !!i.line_uid), true);
+
+  // เมนูที่มีหมายเหตุ/ตัวเลือก ต้องไม่ถูกรวมเข้ากับแถวเปล่า
+  items = seed();
+  items.push({ line_uid: "s3", menu_id: 10, name: "หมูสไลด์", price: 100, qty: 1, note: "ไม่เผ็ด", category: "หมูกระทะ" });
+  const add2 = mkAdd(() => items, (f) => { items = f(items); });
+  add2({ id: 10, name: "หมูสไลด์", price: 100, category: "หมูกระทะ" });
+  ck("ของที่มีหมายเหตุไม่ถูกเอาไปรวมกับของเปล่า",
+    items.filter(i => i._new).map(i => [i.note, i.qty]), [["", 1]]);
+
+  // ── สิ่งที่ตาเห็นบนจอ ──
+  ok_("แถวที่ยังไม่ส่งครัวใช้ธงเดียวกับปุ่ม ไม่เดาจากตัวเลขอีก",
+    APP.includes("items.map((item,idx)=>({item,idx,unsent:!!item._new}))")
+    && APP.includes("const newRows=useMemo(()=>items.filter(i=>i._new&&(+i.qty||0)>0),[items]);")
+    && APP.includes("const hasNewItems=newRows.length>0;"));
+  ok_("สีส้มเข้มขึ้นจากของเดิม (#FFF7ED จางเกินไป)",
+    APP.includes('bg={unsent?"#FFE8CC":C.greenLight}') && !APP.includes('bg={unsent?"#FFF7ED"'));
+  ok_("มีแถบสีข้างแถวให้เห็นแต่ไกล", APP.includes('accent={unsent?"#F97316":null}') && APP.includes("borderLeft:accent?"));
+  ok_("มีป้าย ใหม่ หน้าชื่อเมนู", APP.includes(">ใหม่</span>"));
+  ok_("กดเพิ่มแล้วเลื่อนลงไปให้เห็นของที่เพิ่งเพิ่ม",
+    APP.includes("if(newQty>prevNewQty.current&&listRef.current)listRef.current.scrollTop=listRef.current.scrollHeight;"));
+  // ของที่ยังไม่ส่งครัวไม่มีอะไรใน DB ให้ลบ และครัวยังไม่ได้ทำ จึงไม่ต้องแจ้ง
+  ok_("ยกเลิกของที่ยังไม่ได้ส่ง ไม่ไปแตะบิลใน DB และไม่กวนครัว",
+    APP.includes("if(target._new){setItems(newLocal);return;}"));
+  ok_("ของที่ยังไม่ส่งลดจำนวนได้ถึงศูนย์ ของที่ส่งแล้วยังลดไม่ได้",
+    APP.includes("const floor=it._new?0:Math.max(0,(base.get(sentKey(it))||0)-otherQty);"));
+  ok_("ปิดบิลแล้วธงในจอไม่ติดลงข้อมูล", APP.includes("const itemsWithDisc=items.map(clean).map((i,idx)=>{"));
+  ok_("ส่งครัวแล้วธงในจอไม่ติดลงข้อมูล", APP.includes("const delta=newRows.map(clean);"));
+  // เมนูที่มีตัวเลือกไปคนละทางกับเมนูเปล่า ต้องติดธงเหมือนกัน ไม่งั้นสั่งแล้วปุ่มส่งไม่ติด
+  ok_("เมนูที่มีตัวเลือกก็ติดธงของใหม่เหมือนกัน",
+    APP.includes("options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m),_new:true}]);"));
+  _addOk = true;
+} catch (e) {
+  ok_("ดึงตัวกดเพิ่มเมนูมารันได้ (" + String(e && e.message).slice(0, 60) + ")", false);
+}
+ok_("ด่านชุดของใหม่รันจนจบ", _addOk);
+
+// ══════════════════════════════════════════════════════════════════════════
 // ใบครัวต้องบอกได้ว่าเป็นใบชนิดไหน + ย้ายโต๊ะ
 // เจ้าของสั่ง: "กดพิมพ์ซ้ำแล้วกระดาษต้องรีมาร์คไว้เล็กๆ ว่าเป็นเมนูที่พิมพ์ซ้ำ"
 // ถ้าไม่มีป้าย ครัวเห็นใบเดิมอีกใบก็ทำอีกจาน = ของทิ้งเปล่าทุกครั้งที่กดพิมพ์ซ้ำ

@@ -18442,7 +18442,7 @@ function ReceiptSettingsModal({currentBranch,onClose,onSaved}){
   </Modal>;
 }
 // แถวที่ปัดซ้ายเพื่อเผยปุ่มที่ซ่อนไว้ข้างหลัง (เช่น พิมพ์ซ้ำ/ยกเลิก) — แตะ=ปกติ, ปัดซ้าย=โผล่ปุ่ม
-function SwipeRow({children,actions,actionWidth=86,bg}){
+function SwipeRow({children,actions,actionWidth=86,bg,accent}){
   const[open,setOpen]=useState(false);
   const fg=useRef(null),st=useRef(null),dragged=useRef(false);
   const setX=x=>{if(fg.current)fg.current.style.transform=`translateX(${x}px)`;};
@@ -18452,7 +18452,7 @@ function SwipeRow({children,actions,actionWidth=86,bg}){
   function down(e){const t=e.touches?e.touches[0]:e;dragged.current=false;const b=curX();st.current={x0:t.clientX,y0:t.clientY,base:b,drag:null,cur:b};if(fg.current)fg.current.style.transition="none";}
   function move(e){const s=st.current;if(!s)return;const t=e.touches?e.touches[0]:e;const dx=t.clientX-s.x0,dy=t.clientY-s.y0;if(s.drag===null){if(Math.abs(dx)>10||Math.abs(dy)>10)s.drag=Math.abs(dx)>Math.abs(dy)*1.3;}if(s.drag===true){dragged.current=true;if(e.cancelable&&e.preventDefault)e.preventDefault();const x=Math.max(-actionWidth,Math.min(0,s.base+dx));s.cur=x;setX(x);}}
   function end(){const s=st.current;st.current=null;if(fg.current)fg.current.style.transition="transform .18s";if(!s||s.drag!==true)return;const willOpen=s.cur<-actionWidth/2;setOpen(willOpen);setX(willOpen?-actionWidth:0);}
-  return <div style={{position:"relative",overflow:"hidden",borderRadius:9,marginBottom:6,border:`1px solid ${C.line}`,background:C.bg}}>
+  return <div style={{position:"relative",overflow:"hidden",borderRadius:9,marginBottom:6,border:`1px solid ${accent||C.line}`,borderLeft:accent?`6px solid ${accent}`:`1px solid ${C.line}`,background:C.bg}}>
     <div style={{position:"absolute",top:0,right:0,bottom:0,width:actionWidth,display:"flex",alignItems:"stretch",gap:5,padding:5,boxSizing:"border-box"}}>{actions}</div>
     <div ref={fg} onClickCapture={e=>{if(dragged.current){e.stopPropagation();e.preventDefault();dragged.current=false;}}} onTouchStart={down} onTouchMove={move} onTouchEnd={end} onTouchCancel={end} onMouseDown={down} onMouseMove={e=>{if(st.current)move(e);}} onMouseUp={end} onMouseLeave={()=>{if(st.current&&st.current.drag===true)end();else st.current=null;}} style={{position:"relative",background:bg||C.white,touchAction:"pan-y",willChange:"transform"}}>{children}</div>
   </div>;
@@ -18533,14 +18533,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   // มีรายการใหม่ที่ยังไม่ได้ส่งพิมพ์ไหม (เทียบกับที่ส่งไปแล้วใน existingOrder) → ใช้เปิด/ปิดปุ่ม "ส่งรายการ"
   const sentKey=i=>`${i.menu_id}|${i.note||""}|${optionsText(i.options)}`;
-  // จำนวนที่ "ส่งครัวไปแล้ว" ต่อเมนู (จาก existingOrder) — ใช้แยกสีรายการที่ส่งแล้ว/ยังไม่ส่ง และเปิด/ปิดปุ่มส่ง
-  const sentBaseMap=useMemo(()=>{const m=new Map();(existingOrder?.items||[]).forEach(i=>m.set(sentKey(i),(m.get(sentKey(i))||0)+i.qty));return m;},[existingOrder]);
-  // The same dish can occupy SEVERAL rows (each append adds an array element, it never merges), so
-  // everything below must compare per-menu TOTALS. Comparing one row's qty against the per-menu
-  // aggregate made a repeat helping look already-sent: the button went dead, the kitchen never got
-  // it, and checkout still billed it.
-  const wantMap=useMemo(()=>{const m=new Map();items.forEach(i=>m.set(sentKey(i),(m.get(sentKey(i))||0)+(+i.qty||0)));return m;},[items]);
-  const hasNewItems=useMemo(()=>{for(const[k,want]of wantMap){if(want>(sentBaseMap.get(k)||0))return true;}return false;},[wantMap,sentBaseMap]);
+  // เลิกเดาจากตัวเลขรวมต่อเมนูแล้ว (เทียบยอดรวมกับที่ส่งครัวไปแล้ว) — เพี้ยนได้เมื่อเมนูเดียวกัน
+  // อยู่หลายแถว หรือมีอุปกรณ์อื่นสั่งเมนูเดียวกันเข้ามาพร้อมกัน · ใช้ธง _new ที่ติดตอนกดเพิ่มแทน
+  // ธงนี้อยู่ในจอเท่านั้น ห้ามหลุดลงฐานข้อมูล ไม่งั้นแถวเก่าจะขึ้นสีส้มค้างตลอด
+  const clean=({_new,...r})=>r;
+  const newRows=useMemo(()=>items.filter(i=>i._new&&(+i.qty||0)>0),[items]);
+  const hasNewItems=newRows.length>0;
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
   const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
@@ -18580,13 +18578,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const optsSet=useMemo(()=>new Set(menus.filter(m=>menuHasOptions(m,bidSale,optionLib)).map(m=>m.id)),[menus,bidSale,optionLib]);
   // ต้อง identity คงที่ ไม่งั้นการ์ดที่ memo ไว้จะเห็น onPick เปลี่ยนทุกรอบแล้วเรนเดอร์ใหม่หมด
   // ข้างในใช้ setItems แบบรับค่าเดิมมาคำนวณ จึงไม่ต้องพึ่งอะไรจากรอบเรนเดอร์เลย deps ว่างได้
-  const addItem=useCallback(function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m)}];});},[]);
+  // รวมได้เฉพาะกับแถว "ที่ยังไม่ได้ส่งครัว" เท่านั้น — ห้ามไปบวกทับแถวที่ส่งครัวไปแล้ว
+  // ไม่งั้นแถวที่ครัวได้ไปแล้วจะเปลี่ยนสีและกระโดดที่ทุกครั้งที่แตะ และแยกไม่ออกว่าอันไหนใหม่จริง
+  const addItem=useCallback(function addItem(m){setItems(p=>{const ex=p.find(i=>i._new&&i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m),_new:true}];});},[]);
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
   const pickOrAdd=useCallback((m)=>{if(optsSet.has(m.id))setOptPick(m);else addItem(m);},[optsSet,addItem]);
   function addItemWithOptions(m,chosen,qty){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
-    setItems(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m)}]);
+    setItems(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m),_new:true}]);
     setOptPick(null);
   }
   function chQty(idx,d){
@@ -18595,18 +18595,30 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     const base=new Map();(existingOrder?.items||[]).forEach(b=>base.set(sentKey(b),(base.get(sentKey(b))||0)+b.qty));
     // This row may hold only PART of what was sent for this dish — the floor is whatever the other
     // rows of the same dish don't already cover, else a row gets pinned above its true sent amount.
-    const otherQty=items.reduce((s,x,j)=>(j!==idx&&sentKey(x)===sentKey(it))?s+(+x.qty||0):s,0);
-    const floor=Math.max(0,(base.get(sentKey(it))||0)-otherQty);
+    // แถวที่เพิ่งกดเพิ่ม (ยังไม่ส่งครัว) ลดได้ถึง 0 — ยังไม่มีใครทำ ไม่ต้องแจ้งครัว
+    const otherQty=items.reduce((s,x,j)=>(j!==idx&&!x._new&&sentKey(x)===sentKey(it))?s+(+x.qty||0):s,0);
+    const floor=it._new?0:Math.max(0,(base.get(sentKey(it))||0)-otherQty);
     if(d<0&&it.qty<=floor){posToast("รายการนี้ส่งครัวแล้ว — ลดจำนวนไม่ได้ · ปัดซ้ายเพื่อยกเลิกทั้งรายการ","warn");return;}
     setItems(p=>p.map((x,j)=>j===idx?{...x,qty:Math.max(floor,x.qty+d)}:x).filter(x=>x.qty>0));
   }
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
+  // กดเพิ่มเมนูแล้วเลื่อนลงไปให้เห็นของที่เพิ่งเพิ่ม — รายการที่ยังไม่ส่งอยู่ล่างสุด
+  // บิลยาวๆ พนักงานกดแล้วจอไม่ขยับเลย จะคิดว่าระบบไม่รับแล้วกดซ้ำอีกหลายที
+  const listRef=useRef(null);
+  const newQty=items.reduce((s,i)=>s+(i._new?(+i.qty||0):0),0);
+  const prevNewQty=useRef(newQty);
+  useEffect(()=>{
+    if(newQty>prevNewQty.current&&listRef.current)listRef.current.scrollTop=listRef.current.scrollHeight;
+    prevNewQty.current=newQty;
+  },[newQty]);
 
   async function voidItem(idx){
     if(existingOrder?.status==="paid"){alert("ไม่สามารถยกเลิกรายการของบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'รับเงินเข้า/จ่ายออก' ในเงินในลิ้นชัก");return;}
     const target=items[idx];if(!target)return;
     if(!await confirmDlg({message:`ยกเลิก "${target.name}"?`,title:"ยกเลิกรายการ",confirmLabel:"ยกเลิกรายการ",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
     const newLocal=items.filter((_,i)=>i!==idx);
+    // ยังไม่ได้ส่งครัว = ไม่มีอะไรใน DB ให้ลบ และไม่ต้องแจ้งครัว แค่เอาออกจากจอ
+    if(target._new){setItems(newLocal);return;}
     // ถ้าออเดอร์มีใน DB แล้ว และรายการที่ยกเลิกเป็น "รายการที่ส่งไปแล้ว" → อัปเดต DB (ครัว/QR ลูกค้าตรงกัน)
     // โดยลบเฉพาะรายการที่ส่งแล้วตัวนั้นออก — ไม่ดึงรายการใหม่ที่ "ยังไม่ได้กดส่ง" ลง DB ก่อนเวลา
     if(existingOrder?.id){
@@ -18741,12 +18753,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // Each delta line gets a FRESH uid: deriving it from the panel state made two devices holding
       // the same snapshot mint identical uids, so one waiter's plate was silently deduped away while
       // both saw "sent". A fresh uid means the append can never mistake a real helping for a replay.
-      const delta=[];
-      const rep=new Map();items.forEach(i=>{if(!rep.has(sentKey(i)))rep.set(sentKey(i),i);});
-      for(const[k,want]of wantMap){
-        const sent=sentBaseMap.get(k)||0;const extra=want-sent;
-        if(extra>0)delta.push({...rep.get(k),qty:extra,line_uid:uuidv4()});
-      }
+      // ส่งเฉพาะแถวที่ติดธง "ยังไม่ได้ส่งครัว" — ตรงกับที่พนักงานเห็นเป็นสีส้มบนจอเป๊ะๆ
+      // เดิมคำนวณส่วนต่างจากยอดรวมต่อเมนู ซึ่งเพี้ยนได้ถ้ามีอุปกรณ์อื่นสั่งเมนูเดียวกันเข้ามาพร้อมกัน
+      // (ปุ่มดับทั้งที่ยังมีของใหม่ค้างอยู่บนจอ)
+      // คง line_uid เดิมของแถวไว้ ไม่สร้างใหม่ — ส่งซ้ำเพราะเน็ตสะดุดจะถูกกันซ้ำที่ปลายทางเอง
+      const delta=newRows.map(clean);
       if(existingOrder?.id&&!delta.length){posToast("ไม่มีรายการใหม่ที่ต้องส่ง","warn");setSavingGuard(false);return;}
       const toSend=existingOrder?.id?delta:items;
       const before=(existingOrder?.items||[]).length;
@@ -18774,7 +18785,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     }))return;
     setSavingGuard(true);
     try{
-      const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
+      const itemsWithDisc=items.map(clean).map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
       const cashReceived=payMethod==="cash"?(+cashRcv||total):null;
       const promoMeta=selectedPromo?{promo_id:selectedPromo.id,promo_name:selectedPromo.name,promo_amount:promoDiscount}:{};
       // Base fields (always exist) + full breakdown (needs the migration). If the
@@ -18893,18 +18904,22 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           }}>พิมพ์ใบครัวรายการนี้อีกครั้ง</Btn>
         </div>;
       })()}
-      <div style={{flex:1,overflowY:"auto",padding:8}}>
+      <div ref={listRef} style={{flex:1,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
-          :items.map((item,idx)=>({item,idx,unsent:item.qty>(sentBaseMap.get(sentKey(item))||0)}))
+          :items.map((item,idx)=>({item,idx,unsent:!!item._new}))
             .sort((a,b)=>(a.unsent?1:0)-(b.unsent?1:0))   // ส่งครัวแล้วอยู่บน · เมนูที่เพิ่งกดเข้ามา (ยังไม่ส่ง) ลงไปอยู่ล่างสุด
-            .map(({item,idx,unsent})=><SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} bg={unsent?"#FFF7ED":C.greenLight} actions={<>
+            // สีส้มเดิมจางเกินจนแยกไม่ออกว่าอันไหนยังไม่ได้ส่ง — เข้มขึ้น + แถบข้าง + ป้าย "ใหม่"
+            .map(({item,idx,unsent})=><SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} bg={unsent?"#FFE8CC":C.greenLight} accent={unsent?"#F97316":null} actions={<>
               {existingOrder?.id&&<button onClick={()=>agentReprint([item])} title="พิมพ์ซ้ำเฉพาะรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำรายการนี้" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
               <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{flex:1,border:"none",borderRadius:7,background:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.white}/></button>
             </>}>
             <div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 11px"}}>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13.5,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>
+                <div style={{fontSize:13.5,fontWeight:unsent?900:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {unsent&&<span style={{display:"inline-block",background:"#EA580C",color:C.white,fontSize:9.5,fontWeight:900,borderRadius:5,padding:"1px 6px",marginRight:6,verticalAlign:"middle"}}>ใหม่</span>}
+                  {item.name}
+                </div>
                 {item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>+ {optionsText(item.options)}</div>}
                 {item.note
                   ?<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>
